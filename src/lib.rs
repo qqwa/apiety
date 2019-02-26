@@ -10,6 +10,7 @@ mod packet;
 use std::sync::mpsc::{self, channel, Receiver, Sender};
 use std::time::Instant;
 
+pub use packet::Direction;
 pub use packet::PoePacket;
 
 #[derive(Debug)]
@@ -22,6 +23,7 @@ pub enum Error {
     PNetError,
     UnexpectedPacket,
     StateBroke,
+    CanNotDeserialize,
 }
 
 pub enum Control {
