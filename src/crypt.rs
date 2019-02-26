@@ -228,6 +228,7 @@ impl Session {
                         0 => {
                             // first packet should have id 0x0002
                             if &[0x00, 0x02] != &packet.payload[..2] {
+                                log::warn!("ex: {:?}, got: {:?}",  &[0x00, 0x02], &packet.payload[..2]);
                                 return Err(Error::UnexpectedPacket);
                             }
                             conn.send += 1;
@@ -276,6 +277,7 @@ impl Session {
                         0 => {
                             // first packet should have id 0x0002
                             if &[0x00, 0x02] != &packet.payload[..2] {
+                                log::warn!("ex: {:?}, got: {:?}",  &[0x02, 0x04], &packet.payload[..2]);
                                 return Err(Error::UnexpectedPacket);
                             }
                             conn.recv += 1;
