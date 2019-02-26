@@ -76,12 +76,11 @@ pub fn decrypted_stream() -> (Receiver<PoePacket>, Sender<Control>) {
                                     // search memory for key
                                     let pid = mem::get_process_pid("PathOfExile_x64.exe");
                                     let prog = mem::ProcessMemory::new(pid);
-                                    let positions =
-                                        prog.search(&b"expand 32-byte k"[..], 10 * 1024 * 2014);
+                                    let tmp_keys = prog.search(&b"expand 32-byte k"[..], 64, 1024);
                                     let mut keys = Vec::new();
-                                    for position in positions {
+                                    for key in tmp_keys {
                                         let mut buffer = [0u8; 64];
-                                        prog.get(position as u64, &mut buffer);
+                                        buffer.copy_from_slice(&key[..64]);
                                         keys.push(buffer);
                                     }
 
