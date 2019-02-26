@@ -1,5 +1,7 @@
 //! Caputre network traffic
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -7,7 +9,36 @@ use std::time::Duration;
 use crate::packet::{Direction, PoePacket};
 use crate::Error;
 
-fn poe_packet_from_pnet(packet: &[u8]) -> Result<PoePacket, Error> {
+struct NetPacket {
+    direction: crate::packet::Direction,
+    ip: std::net::Ipv4Addr,
+    port: u16,
+    payload: Vec<u8>,
+    push: bool,
+}
+
+impl NetPacket {
+    pub fn new(
+        payload_slice: &[u8],
+        direction: Direction,
+        ip: std::net::Ipv4Addr,
+        port: u16,
+        push: bool,
+    ) -> Self {
+        let mut payload = Vec::with_capacity(payload_slice.len());
+        payload.extend_from_slice(&payload_slice[..]);
+
+        NetPacket {
+            direction,
+            payload,
+            ip,
+            port,
+            push,
+        }
+    }
+}
+
+fn net_packet_from_pnet(packet: &[u8]) -> Result<NetPacket, Error> {
     let payload_length;
 
     let ethernet = if let Some(eth) = EthernetPacket::owned(packet.to_vec()) {
@@ -54,11 +85,14 @@ fn poe_packet_from_pnet(packet: &[u8]) -> Result<PoePacket, Error> {
         panic!("Tried to create PoePacket from unknown port");
     };
 
-    Ok(PoePacket::new(
+    let push = tcp.get_flags() & pnet::packet::tcp::TcpFlags::PSH != 0;
+
+    Ok(NetPacket::new(
         &tcp.payload()[..payload_length],
         direction,
         ip,
         port,
+        push,
     ))
 }
 
@@ -110,6 +144,7 @@ pub fn capture_from_interface(
                 // Create a channel to receive on
 
                 let mut found = false;
+                let mut bufferd_packets: HashMap<u16, RefCell<Vec<NetPacket>>> = HashMap::new();
                 loop {
                     if found_stream.load(Ordering::SeqCst) && !found {
                         // other interface found packet, so we can shut this one down
@@ -137,12 +172,51 @@ pub fn capture_from_interface(
 
                                 if found {
                                     let capture_packet =
-                                        if let Ok(x) = poe_packet_from_pnet(&packet) {
+                                        if let Ok(x) = net_packet_from_pnet(&packet) {
                                             x
                                         } else {
                                             continue;
                                         };
-                                    sender.send(capture_packet).unwrap();
+                                    if capture_packet.push {
+                                        if let Some(bufferd_packets) =
+                                            bufferd_packets.remove(&capture_packet.port)
+                                        {
+                                            let buffer = bufferd_packets.borrow_mut();
+                                            let mut payload = Vec::new();
+                                            for packet in buffer.iter() {
+                                                payload.extend_from_slice(&packet.payload[..]);
+                                            }
+                                            payload.extend_from_slice(&capture_packet.payload[..]);
+                                            let poepacket = PoePacket::new(
+                                                &payload[..],
+                                                capture_packet.direction,
+                                                capture_packet.ip,
+                                                capture_packet.port,
+                                            );
+                                            sender.send(poepacket).unwrap();
+                                        } else {
+                                            let poepacket = PoePacket::new(
+                                                &capture_packet.payload[..],
+                                                capture_packet.direction,
+                                                capture_packet.ip,
+                                                capture_packet.port,
+                                            );
+                                            sender.send(poepacket).unwrap();
+                                        }
+                                    } else {
+                                        if bufferd_packets.contains_key(&capture_packet.port) {
+                                            let mut buffer = bufferd_packets
+                                                .get_mut(&capture_packet.port)
+                                                .unwrap()
+                                                .borrow_mut();
+                                            buffer.push(capture_packet);
+                                        } else {
+                                            bufferd_packets.insert(
+                                                capture_packet.port,
+                                                RefCell::new(vec![capture_packet]),
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
