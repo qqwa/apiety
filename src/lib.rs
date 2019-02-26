@@ -1,7 +1,3 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-#![feature(box_patterns)]
-#![allow(proc_macro_derive_resolution_fallback)]
-
 mod crypt;
 mod mem;
 mod net;
