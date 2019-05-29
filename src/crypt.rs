@@ -329,7 +329,7 @@ impl Session {
 
                 match &packet.payload[..2] {
                     // check if packet has id 0x0f to extract keypair
-                    &[0x00, 0x0f] => {
+                    &[0x00, 0x10] => {
                         let connection_id = NetworkEndian::read_u32(&packet.payload[10..14]);
 
                         let mut key: [u8; 32] = Default::default();
