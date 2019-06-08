@@ -99,12 +99,16 @@ fn net_packet_from_pnet(packet: &[u8]) -> Result<NetPacket, Error> {
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use pnet::datalink;
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::ipv4::Ipv4Packet;
 use pnet::packet::tcp::{MutableTcpPacket, TcpPacket};
 use pnet::packet::Packet;
+
+#[cfg(windows)]
+use pnet::datalink::pcap::{interfaces, channel, Config};
+#[cfg(not(windows))]
+use pnet::datalink::{interfaces, channel, Config};
 
 // listens on all interfaces and searches for packets to/from port 20481, if found shuts down all
 // interfaces, but the one that found it
@@ -117,7 +121,7 @@ pub fn capture_from_interface(
     let found_stream = Arc::new(AtomicBool::new(false));
     let mut kill_switches = Vec::new();
 
-    for interface in pnet::datalink::interfaces() {
+    for interface in interfaces() {
         let found_stream = found_stream.clone();
         let sender = sender.clone();
 
@@ -125,15 +129,14 @@ pub fn capture_from_interface(
 
         kill_switches.push(kill_tx);
 
-        let (_, mut rx) = match datalink::channel(
+        let mut rx = match channel(
             &interface,
-            datalink::Config {
-                // TODO: doesn't work on windows?
+            Config {
                 read_timeout: Some(Duration::from_secs(1)),
                 ..Default::default()
             },
         ) {
-            Ok(Ethernet(tx, rx)) => (tx, rx),
+            Ok(Ethernet(_, rx)) => rx,
             Ok(_) => panic!("packetdump: unhandled channel type: {}"),
             Err(_) => return Err(crate::Error::NoPermission),
         };
