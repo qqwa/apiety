@@ -223,6 +223,23 @@ pub fn capture_from_interface(
                                 }
                             }
                         }
+                        #[cfg(feature = "pcap")]
+                        Err(ref e) if e.kind() == std::io::ErrorKind::Other => {
+                            if let Some(err) = e.get_ref() {
+                                if err.is::<pcap::Error>() {
+                                    let err =  err.downcast_ref::<pcap::Error>().unwrap();
+                                    match err {
+                                        pcap::Error::TimeoutExpired => {}
+                                        _ => {
+                                            println!("{:?}", err);
+                                            break;
+                                        }
+                                    }
+                                }
+                            } else {
+                                break;
+                            }
+                        }
                         Err(e) => {
                             use std::io::ErrorKind;
                             if e.kind() != ErrorKind::TimedOut {
