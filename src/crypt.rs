@@ -193,8 +193,8 @@ impl Session {
                         );
                         log::info!("Added keypair for connection id: {}", connection_id);
                     }
-                    // check if packet has id 0x18 to remove connection
-                    &[0x00, 0x18] => {
+                    // check if packet has id 0x19 to remove connection
+                    &[0x00, 0x19] => {
                         remove_conn = true;
                     }
                     _ => {}
