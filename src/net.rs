@@ -226,14 +226,14 @@ pub fn capture_from_interface(
                         Err(e) => {
                             use std::io::ErrorKind;
                             if e.kind() != ErrorKind::TimedOut {
-                                //                            panic!("{}: unable to receive packet: {:?}", interface.name, e);
+                                panic!("{}: unable to receive packet: {:?}", interface.name, e);
                                 //interface is probably down, just leave loop and let the thread exit
                                 break;
                             }
                         }
                     }
                 }
-                //            println!("{} exited {:?} {:?}", &interface.name, found, found_stream);
+                println!("{} exited {:?} {:?}", &interface.name, found, found_stream);
             });
     }
 

@@ -9,10 +9,10 @@ fn main() {
     let clients_listerner = clients.clone();
 
     std::thread::spawn(move || {
-        let listener = TcpListener::bind("127.0.0.1:10001").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:10001").expect("Failed to bind TcpListerner");
         for stream in listener.incoming() {
-            let mut clients = clients_listerner.lock().unwrap();
-            clients.push(stream.unwrap());
+            let mut clients = clients_listerner.lock().expect("Failed to lock clients_listerner");
+            clients.push(stream.expect("Failed to push new client to clients_listerner"));
         }
     });
 
@@ -21,7 +21,7 @@ fn main() {
         match packets.recv() {
             Ok(packet) => {
                 println!("{}", packet);
-                let mut clients = clients.lock().unwrap();
+                let mut clients = clients.lock().expect("Failed to lock clients_listerner");
                 let buf = packet.to_buf();
                 let mut remove_list = Vec::new();
                 for i in 0..clients.len() {
@@ -37,9 +37,9 @@ fn main() {
                     clients.remove(*i);
                 }
             }
-            Err(_) => {
-                println!("error");
-                control.send(apiety::Control::Shutdown).unwrap();
+            Err(e) => {
+                println!("error: {:?}", e);
+                control.send(apiety::Control::Shutdown).expect("Failed to send shutdown message to control");
                 break;
             }
         }
