@@ -17,14 +17,12 @@ pub fn get_process_pid(process_name: &str) -> usize {
 ///     let positions = prog.search(&b"expand 32-byte k"[..], 64, 1*1024);
 /// ```
 
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 mod linux;
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 pub use linux::ProcessMemory;
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 pub use windows::ProcessMemory;
-
-

@@ -52,7 +52,7 @@ impl fmt::Display for Direction {
 pub struct PoePacket {
     pub direction: Direction,
     pub ip: std::net::Ipv4Addr,
-    pub port: u16,
+    pub stream_id: u16,
     pub payload: Vec<u8>,
 }
 
@@ -74,7 +74,7 @@ impl PoePacket {
         payload_slice: &[u8],
         direction: Direction,
         ip: std::net::Ipv4Addr,
-        port: u16,
+        stream_id: u16,
     ) -> Self {
         let mut payload = Vec::with_capacity(payload_slice.len());
         payload.extend_from_slice(&payload_slice[..]);
@@ -83,14 +83,14 @@ impl PoePacket {
             direction,
             payload,
             ip,
-            port,
+            stream_id: stream_id,
         }
     }
 
     pub fn to_buf(&self) -> Vec<u8> {
         let mut buf = vec![0u8; 9 + self.payload.len()];
         buf[0] = self.direction.into();
-        NetworkEndian::write_u16(&mut buf[1..3], self.port);
+        NetworkEndian::write_u16(&mut buf[1..3], self.stream_id);
         NetworkEndian::write_u32(&mut buf[3..7], self.ip.into());
         NetworkEndian::write_u16(&mut buf[7..9], self.payload.len() as u16);
         buf.extend_from_slice(&self.payload[..]);
@@ -119,7 +119,7 @@ impl PoePacket {
             direction,
             payload,
             ip,
-            port,
+            stream_id: port,
         };
 
         Ok(packet)

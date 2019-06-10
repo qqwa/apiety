@@ -7,14 +7,14 @@ edition = "2018"
 [dependencies]
 sysinfo = "0.8.0"
 regex = "1.0"
-pnet = "0.22.0"
-pcap = { version = "0.7", optional = true }
+pcap = "0.7"
 rust-crypto = "0.2.36"
 log = "0.4"
+env_logger = "0.6.1"
 byteorder = "1.3.1"
+etherparse = "0.8.2"
+structopt = "0.2"
+hex = "0.3.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["psapi", "processthreadsapi", "handleapi", "memoryapi", "errhandlingapi"] }
-
-[features]
-default = ["pnet/pcap", "pcap"]

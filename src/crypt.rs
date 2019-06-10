@@ -97,12 +97,16 @@ impl Session {
     }
 
     fn handle_gamepacket(&mut self, packet: &mut PoePacket) -> Result<(), Error> {
-        if !self.connections.contains_key(&packet.port) {
+        if !self.connections.contains_key(&packet.stream_id) {
             self.connections
-                .insert(packet.port, RefCell::new(Connection::new()));
+                .insert(packet.stream_id, RefCell::new(Connection::new()));
         }
 
-        let mut conn = self.connections.get(&packet.port).unwrap().borrow_mut();
+        let mut conn = self
+            .connections
+            .get(&packet.stream_id)
+            .unwrap()
+            .borrow_mut();
         let mut remove_conn = false;
 
         match conn.state {
@@ -205,19 +209,23 @@ impl Session {
         if remove_conn {
             self.keystore.remove(&conn.id);
             std::mem::drop(conn);
-            self.connections.remove(&packet.port);
+            self.connections.remove(&packet.stream_id);
         }
 
         Ok(())
     }
 
     fn handle_loginpacket(&mut self, packet: &mut PoePacket) -> Result<(), Error> {
-        if !self.connections.contains_key(&packet.port) {
+        if !self.connections.contains_key(&packet.stream_id) {
             self.connections
-                .insert(packet.port, RefCell::new(Connection::new()));
+                .insert(packet.stream_id, RefCell::new(Connection::new()));
         }
 
-        let mut conn = self.connections.get(&packet.port).unwrap().borrow_mut();
+        let mut conn = self
+            .connections
+            .get(&packet.stream_id)
+            .unwrap()
+            .borrow_mut();
         let mut remove_conn = false;
 
         match conn.state {
@@ -228,7 +236,11 @@ impl Session {
                         0 => {
                             // first packet should have id 0x0002
                             if &[0x00, 0x02] != &packet.payload[..2] {
-                                log::warn!("ex: {:?}, got: {:?}",  &[0x00, 0x02], &packet.payload[..2]);
+                                log::warn!(
+                                    "ex: {:?}, got: {:?}",
+                                    &[0x00, 0x02],
+                                    &packet.payload[..2]
+                                );
                                 return Err(Error::UnexpectedPacket);
                             }
                             conn.send += 1;
@@ -277,7 +289,11 @@ impl Session {
                         0 => {
                             // first packet should have id 0x0002
                             if &[0x00, 0x02] != &packet.payload[..2] {
-                                log::warn!("ex: {:?}, got: {:?}",  &[0x02, 0x04], &packet.payload[..2]);
+                                log::warn!(
+                                    "ex: {:?}, got: {:?}",
+                                    &[0x02, 0x04],
+                                    &packet.payload[..2]
+                                );
                                 return Err(Error::UnexpectedPacket);
                             }
                             conn.recv += 1;
@@ -361,14 +377,14 @@ impl Session {
         if remove_conn {
             self.keystore.remove(&conn.id);
             std::mem::drop(conn);
-            self.connections.remove(&packet.port);
+            self.connections.remove(&packet.stream_id);
         }
 
         Ok(())
     }
 }
 
-fn gen_salsa_key(buffer: &[u8]) -> ([u8; 32], [u8; 8]) {
+pub(crate) fn gen_salsa_key(buffer: &[u8]) -> ([u8; 32], [u8; 8]) {
     assert!(buffer.len() == 64);
 
     let tmp = buffer[16..16 + 48].to_vec();
@@ -397,7 +413,7 @@ fn gen_salsa_key(buffer: &[u8]) -> ([u8; 32], [u8; 8]) {
 }
 
 #[derive(PartialEq, Eq)]
-struct KeyPair {
+pub(crate) struct KeyPair {
     pub key: [u8; 32],
     pub iv_sender: [u8; 8],
     pub iv_receiver: [u8; 8],

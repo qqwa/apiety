@@ -1,9 +1,10 @@
+pub mod caputre_packets;
 mod crypt;
-mod mem;
-mod net;
+pub mod decrypter;
+pub mod mem;
 mod packet;
 
-use std::sync::mpsc::{self, channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver};
 use std::time::Instant;
 
 pub use packet::Direction;
@@ -27,10 +28,9 @@ pub enum Control {
     KeyPair([u8; 32], [u8; 8], [u8; 8]),
 }
 
-pub fn decrypted_stream() -> (Receiver<PoePacket>, Sender<Control>) {
+pub fn decrypted_stream() -> Receiver<PoePacket> {
     let (packet_tx, packet_rx) = channel();
-    let (handle, control_tx, packet) = encrypted_stream().unwrap();
-    let (con, control_rx) = channel();
+    let packet = encrypted_stream().unwrap();
 
     std::thread::Builder::new()
         .name("decrypted_stream thread".to_string())
@@ -38,23 +38,6 @@ pub fn decrypted_stream() -> (Receiver<PoePacket>, Sender<Control>) {
             let mut session = crypt::Session::new();
 
             loop {
-                match control_rx.try_recv() {
-                    Ok(control) => match control {
-                        Control::Shutdown => {
-                            control_tx.send(Control::Shutdown).unwrap();
-                            break;
-                        }
-                        _ => {}
-                    },
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        // communication channel broke, shutdown thread
-                        log::warn!("Control channel decrypted_stream broke");
-                        control_tx.send(Control::Shutdown).unwrap();
-                        break;
-                    }
-                }
-
                 let mut packet_message = packet.recv();
                 match packet_message {
                     Ok(ref mut packet) => {
@@ -116,56 +99,19 @@ pub fn decrypted_stream() -> (Receiver<PoePacket>, Sender<Control>) {
                     }
                 }
             }
-
-            control_tx.send(Control::Shutdown).unwrap();
-
-            handle.join().unwrap();
         })
         .unwrap();
 
-    (packet_rx, con)
+    packet_rx
 }
 
 // returns handles, sender to shutdown threads and receiver to get packets
-fn encrypted_stream() -> Result<
-    (
-        std::thread::JoinHandle<()>,
-        Sender<Control>,
-        Receiver<packet::PoePacket>,
-    ),
-    Error,
-> {
-    let (control_tx, control_rx) = channel();
+pub fn encrypted_stream() -> Result<Receiver<packet::PoePacket>, Error> {
+    let (capture_tx, capture_rx) = channel();
     let (packet_tx, packet_rx) = channel();
 
-    let kill_switches = net::capture_from_interface(packet_tx)?;
+    // TODO: Arc::new(AtomicBool::new(false)); to stop capture threads
+    caputre_packets::capture_from_interface(capture_tx)?;
 
-    let handle = std::thread::Builder::new()
-        .name("encrypted_stream thread".to_string())
-        .spawn(move || {
-            let mut running = true;
-            while running {
-                match control_rx.recv() {
-                    Ok(control) => match control {
-                        Control::Shutdown => {
-                            log::info!("Shutting down network sniffer");
-                            running = false;
-                        }
-                        _ => {}
-                    },
-                    Err(e) => {
-                        log::warn!("Control channel broke: {}", e);
-                    }
-                }
-            }
-
-            for kill_switch in kill_switches {
-                // we don't care about result, if one fails that means
-                // the thread is already finished
-                let _ = kill_switch.send(());
-            }
-        })
-        .expect("failed to start control thread for network sniffer");
-
-    Ok((handle, control_tx, packet_rx))
+    Ok(packet_rx)
 }

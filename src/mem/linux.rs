@@ -47,13 +47,13 @@ impl ProcessMemory {
                 }
 
                 for i in 0..(bytes / 4) as usize {
-                    if buffer.len() < (i * 4) + magic.len() ||  buffer.len() < (i * 4) + size {
+                    if buffer.len() < (i * 4) + magic.len() || buffer.len() < (i * 4) + size {
                         break;
                     }
                     if &buffer[i * 4..(i * 4) + magic.len()] == magic {
                         let mut buf: Vec<u8> = Vec::with_capacity(size);
                         let start_addr = i * 4;
-                        buf.extend_from_slice(&buffer[start_addr..start_addr+size]);
+                        buf.extend_from_slice(&buffer[start_addr..start_addr + size]);
                         result.push(buf);
                     }
                 }
