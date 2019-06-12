@@ -128,7 +128,7 @@ impl StreamChannel {
         StreamChannel {
             packet_buffer: HashMap::new(),
             count: 1,
-            state: Normal,
+            state: StreamChannelState::Normal,
             sequence_number: tcp.sequence_number(),
             next_sequence_number: (tcp.sequence_number() + 1) % std::u32::MAX,
             acknowledgment_number: tcp.acknowledgment_number(),
