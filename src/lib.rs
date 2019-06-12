@@ -73,7 +73,8 @@ pub fn decrypted_stream() -> Receiver<PoePacket> {
 
                                             match (key1, key2) {
                                                 (Some(key1), Some(key2)) => {
-                                                    match session.add_keypair(&key1[..], &key2[..]) {
+                                                    match session.add_keypair(&key1[..], &key2[..])
+                                                    {
                                                         Ok(()) => {
                                                             tries += 1;
                                                             continue 'inner;

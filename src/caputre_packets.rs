@@ -37,7 +37,7 @@ pub fn capture_from_interface(sender: mpsc::Sender<Vec<u8>>) -> Result<(), Error
                                 .send(Vec::from(packet.data))
                                 .expect("send packet from caputre thread");
                         }
-                        Err(pcap::Error::TimeoutExpired) => {},
+                        Err(pcap::Error::TimeoutExpired) => {}
                         Err(e) => {
                             log::warn!("{:?}", e);
                             break;
@@ -222,7 +222,11 @@ impl StreamChannel {
                     self.next_sequence_number =
                         (tcp.sequence_number() + packet.payload.len() as u32) % std::u32::MAX;
                     self.acknowledgment_number = tcp.acknowledgment_number();
-                    log::info!("Found currently missing packet with seq: {}, next: {}", tcp.sequence_number(), self.next_sequence_number);
+                    log::info!(
+                        "Found currently missing packet with seq: {}, next: {}",
+                        tcp.sequence_number(),
+                        self.next_sequence_number
+                    );
 
                     // construct packet
                     match self.current_packet.as_mut() {
@@ -255,7 +259,11 @@ impl StreamChannel {
                         self.next_sequence_number =
                             (tcp.sequence_number + payload.len() as u32) % std::u32::MAX;
                         self.acknowledgment_number = tcp.acknowledgment_number;
-                        log::info!("Found currently missing packet with seq: {}, next: {}", tcp.sequence_number, self.next_sequence_number);
+                        log::info!(
+                            "Found currently missing packet with seq: {}, next: {}",
+                            tcp.sequence_number,
+                            self.next_sequence_number
+                        );
 
                         // construct packet
                         match self.current_packet.as_mut() {
@@ -288,7 +296,9 @@ impl StreamChannel {
                     StreamChannelState::Recover
                 } else {
                     // check if we got this packet before inserting into packet buffer, only insert packets with payload
-                    if !self.packet_buffer.contains_key(&tcp.sequence_number()) && packet.payload.len() != 0 {
+                    if !self.packet_buffer.contains_key(&tcp.sequence_number())
+                        && packet.payload.len() != 0
+                    {
                         self.packet_buffer.insert(
                             tcp.sequence_number(),
                             (tcp.to_header(), packet.payload.to_owned()),
@@ -402,24 +412,28 @@ impl StreamData {
                 if self.to_out == tcp.destination_port() {
                     let mut new_packets = self.channel_out.update(&packet);
                     result.append(&mut new_packets);
-//                    if self.channel_out.state == StreamChannelState::Finished {
-//                        ConnectionState::Broken
-//                    } else {
-//                        ConnectionState::Connected
-//                    }
+                //                    if self.channel_out.state == StreamChannelState::Finished {
+                //                        ConnectionState::Broken
+                //                    } else {
+                //                        ConnectionState::Connected
+                //                    }
                 } else {
                     let mut new_packets = self.channel_in.as_mut().unwrap().update(&packet);
                     result.append(&mut new_packets);
-//                    if self.channel_in.as_mut().unwrap().state == StreamChannelState::Finished {
-//                        ConnectionState::Broken
-//                    } else {
-//                        ConnectionState::Connected
-//                    }
+                    //                    if self.channel_in.as_mut().unwrap().state == StreamChannelState::Finished {
+                    //                        ConnectionState::Broken
+                    //                    } else {
+                    //                        ConnectionState::Connected
+                    //                    }
                 }
                 // check channel state
                 let out_state = self.channel_out.state;
                 let in_state = self.channel_in.as_ref().unwrap().state;
-                if (out_state == StreamChannelState::Finished(true) || out_state == StreamChannelState::Broken) && (in_state == StreamChannelState::Finished(true) || in_state == StreamChannelState::Broken) {
+                if (out_state == StreamChannelState::Finished(true)
+                    || out_state == StreamChannelState::Broken)
+                    && (in_state == StreamChannelState::Finished(true)
+                        || in_state == StreamChannelState::Broken)
+                {
                     ConnectionState::Closed
                 } else {
                     ConnectionState::Connected
@@ -474,7 +488,6 @@ impl StreamReassembly {
                     self.stream_data
                         .insert(stream_id, StreamData::from_tcp_slice(&tcp, stream_id));
                 }
-
 
                 // process packets of a connection, including finishing of the handshake
                 if tcp.ack() || tcp.psh() || tcp.fin() {

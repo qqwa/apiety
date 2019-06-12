@@ -52,7 +52,7 @@ fn main() {
         }
     }
 
-//    let mut decrypter = apiety::decrypter::Decrypter::new();
+    //    let mut decrypter = apiety::decrypter::Decrypter::new();
     let mut decrypter = apiety::crypt::Session::new();
     if let (Some(key_s), Some(key_r)) = (opt.key_s, opt.key_r) {
         let buffer1 = hex::decode(key_s).expect("Failed to decode key_s");
