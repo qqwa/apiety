@@ -154,6 +154,8 @@ impl StreamChannel {
             panic!("Couldn't get tcp header, this should never happen here");
         };
 
+        let log_prefix = tcp_to_string(&tcp.to_header());
+
         self.state = match self.state {
             // everything is normal just check
             StreamChannelState::Normal => {
@@ -181,7 +183,10 @@ impl StreamChannel {
                         if let Some(net_packet) = self.current_packet.take() {
                             packets.push(net_packet);
                         } else {
-                            log::warn!("Tried to push net_packet even tho it was None");
+                            log::warn!(
+                                "{} Tried to push net_packet even tho it was None",
+                                log_prefix
+                            );
                         }
                     }
 
@@ -201,7 +206,8 @@ impl StreamChannel {
                             (tcp.to_header(), packet.payload.to_owned()),
                         );
                         log::warn!(
-                        "[Entering Recover State] Wrong sequence number... expected: {}, got: {}",
+                        "{} [Entering Recover State] Wrong sequence number... expected: {}, got: {}",
+                        log_prefix,
                         self.next_sequence_number,
                         tcp.sequence_number()
                         );
@@ -223,7 +229,8 @@ impl StreamChannel {
                         (tcp.sequence_number() + packet.payload.len() as u32) % std::u32::MAX;
                     self.acknowledgment_number = tcp.acknowledgment_number();
                     log::info!(
-                        "Found currently missing packet with seq: {}, next: {}",
+                        "{} Found currently missing packet with seq: {}, next: {}",
+                        log_prefix,
                         tcp.sequence_number(),
                         self.next_sequence_number
                     );
@@ -245,7 +252,10 @@ impl StreamChannel {
                         if let Some(net_packet) = self.current_packet.take() {
                             packets.push(net_packet);
                         } else {
-                            log::warn!("Tried to push net_packet even tho it was None");
+                            log::warn!(
+                                "{} Tried to push net_packet even tho it was None",
+                                log_prefix
+                            );
                         }
                     }
 
@@ -260,7 +270,8 @@ impl StreamChannel {
                             (tcp.sequence_number + payload.len() as u32) % std::u32::MAX;
                         self.acknowledgment_number = tcp.acknowledgment_number;
                         log::info!(
-                            "Found currently missing packet with seq: {}, next: {}",
+                            "{} Found currently missing packet with seq: {}, next: {}",
+                            log_prefix,
                             tcp.sequence_number,
                             self.next_sequence_number
                         );
@@ -281,7 +292,7 @@ impl StreamChannel {
 
                     // still missing packets for full recovery...
                     if self.packet_buffer.is_empty() {
-                        log::warn!("[Exiting Recover State]");
+                        log::warn!("{} [Exiting Recover State]", log_prefix);
                         if last_tcp.fin() {
                             self.next_sequence_number = (tcp.sequence_number() + 1) % std::u32::MAX;
                             StreamChannelState::Finished(false)
@@ -292,7 +303,11 @@ impl StreamChannel {
                         StreamChannelState::Recover
                     }
                 } else if self.next_sequence_number > tcp.sequence_number() {
-                    log::warn!("Duplicate packet ignoring...");
+                    log::warn!(
+                        "{} Duplicate packet ignoring...seq: {}",
+                        log_prefix,
+                        tcp.sequence_number()
+                    );
                     StreamChannelState::Recover
                 } else {
                     // check if we got this packet before inserting into packet buffer, only insert packets with payload
@@ -311,6 +326,7 @@ impl StreamChannel {
                 // got acknowledgment?
                 if self.next_sequence_number == tcp.sequence_number() {
                     // everything is good got last packet on this stream
+                    log::info!("{} closed connection", log_prefix);
                     StreamChannelState::Finished(true)
                 } else {
                     StreamChannelState::Broken
@@ -476,6 +492,14 @@ impl StreamReassembly {
                     return packets;
                 };
 
+                if tcp.checksum()
+                    != tcp
+                        .calc_checksum_ipv4(&ip, packet.payload)
+                        .expect("calc checksum")
+                {
+                    log::warn!("{} Wrong checksum", tcp_to_string(&tcp.to_header()));
+                }
+
                 let (_, stream_id) = ports_to_direction(tcp.source_port(), tcp.destination_port());
 
                 // first packet of handshake
@@ -547,4 +571,9 @@ fn ports_to_direction(source_port: u16, destination_port: u16) -> (Direction, u1
         // TODO: handle this error better
         panic!("Tried to create PoePacket from unknown port");
     }
+}
+
+fn tcp_to_string(tcp: &TcpHeader) -> String {
+    let (direction, stream_id) = ports_to_direction(tcp.source_port, tcp.destination_port);
+    format!("{} [{}]", direction, stream_id).to_string()
 }
