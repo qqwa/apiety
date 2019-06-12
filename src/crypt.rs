@@ -115,6 +115,10 @@ impl Session {
                 if Direction::ToGameserver == packet.direction {
                     match conn.send {
                         0 => {
+                            if packet.payload.len() < 6 {
+                                log::warn!("For some random reason we just tried to \"create\" a new game server connection if a to small packet...");
+                                return Err(Error::StateBroke);
+                            }
                             let connection_id = NetworkEndian::read_u32(&packet.payload[2..6]);
                             conn.id = connection_id;
                             log::info!("Getting keys from connection id: {}", connection_id);

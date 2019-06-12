@@ -72,8 +72,9 @@ fn main() {
                 // process packet into NetPacket, returns everytime it got a fully assembled packet in the right order
                 let mut packets = stream_reassembly.process(&packet);
                 for mut packet in packets {
-                    decrypter.process(&mut packet);
-                    log::info!("{}", packet);
+                    if let Ok(()) = decrypter.process(&mut packet) {
+                        log::info!("{}", packet);
+                    }
                 }
             }
             Err(e) => {
