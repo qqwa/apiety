@@ -74,22 +74,285 @@ pub fn capture_from_file(
     Ok(())
 }
 
+use std::cmp::Ordering;
+
+/// implements RFC 1982 for u32 bit SerialNumbers
+#[derive(Eq)]
+struct SerialNumber(u32);
+
+impl Ord for SerialNumber {
+    fn cmp(&self, rhs: &Self) -> Ordering {
+        if self.0 == rhs.0 {
+            return Ordering::Equal;
+        }
+        if (self.0 < rhs.0 && rhs.0 - self.0 < 2147483648)
+            || (self.0 > rhs.0 && self.0 - rhs.0 > 2147483648)
+        {
+            return Ordering::Less;
+        } else {
+            return Ordering::Greater;
+        }
+    }
+}
+impl PartialOrd for SerialNumber {
+    fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
+        Some(self.cmp(rhs))
+    }
+}
+impl PartialEq for SerialNumber {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.0 == rhs.0
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub struct StreamIdentifier {
+    pub(crate) source_ip: std::net::Ipv4Addr,
+    pub(crate) dest_ip: std::net::Ipv4Addr,
+    pub(crate) source_port: u16,
+    pub(crate) dest_port: u16,
+}
+
+impl StreamIdentifier {
+    pub fn new(
+        source_ip: std::net::Ipv4Addr,
+        dest_ip: std::net::Ipv4Addr,
+        source_port: u16,
+        dest_port: u16,
+    ) -> Self {
+        StreamIdentifier {
+            source_ip,
+            dest_ip,
+            source_port,
+            dest_port,
+        }
+    }
+
+    pub fn from_sliced_packet(packet: &SlicedPacket) -> Option<Self> {
+        let ip = if let Some(InternetSlice::Ipv4(value)) = &packet.ip {
+            value
+        } else {
+            return None;
+        };
+        let tcp = if let Some(TransportSlice::Tcp(value)) = &packet.transport {
+            value
+        } else {
+            return None;
+        };
+        Some(StreamIdentifier {
+            source_ip: ip.source_addr(),
+            dest_ip: ip.destination_addr(),
+            source_port: tcp.source_port(),
+            dest_port: tcp.destination_port(),
+        })
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum StreamState {
+    Initial,
+    Sent_SYN,
+    Established,
+    Sent_FIN,
+    Finished,
+    Sent_RST,
+    Broken,
+}
+
+impl StreamState {
+    fn update(&self, tcp: &TcpHeaderSlice) -> StreamState {
+        use StreamState::*;
+
+        if tcp.fin() {
+            return Sent_FIN;
+        }
+        if tcp.syn() {
+            return Sent_SYN;
+        }
+        if tcp.rst() {
+            return Sent_RST;
+        }
+
+        if *self == Sent_SYN && tcp.ack() {
+            return Established;
+        }
+        if *self == Sent_FIN && tcp.ack() {
+            return Finished;
+        }
+
+        return *self;
+    }
+}
+
+struct Fragment {
+    tcp: TcpHeader,
+    payload: Vec<u8>,
+}
+
+struct Stream {
+    identifier: StreamIdentifier,
+    fragments: HashMap<u32, Fragment>,
+    state: StreamState,
+    sequence_number: SerialNumber,
+    buffer: Vec<u8>,
+}
+
+impl Stream {
+    fn new(identifier: StreamIdentifier) -> Self {
+        Stream {
+            identifier,
+            fragments: HashMap::new(),
+            state: StreamState::Initial,
+            sequence_number: SerialNumber(0),
+            buffer: Vec::new(),
+        }
+    }
+
+    fn process(&mut self, packet: SlicedPacket) -> Vec<NetPacket> {
+        let mut finished_packets = Vec::new();
+        if self.state == StreamState::Broken {
+            return finished_packets;
+        }
+
+        // process packet into headers
+        //        let packet = if let Ok(packet) = SlicedPacket::from_ethernet(&packet) {
+        //            packet
+        //        } else {
+        //            self.state =  StreamState::Broken;
+        //        };
+        let ip = if let Some(InternetSlice::Ipv4(value)) = &packet.ip {
+            value
+        } else {
+            self.state = StreamState::Broken;
+            return finished_packets;
+        };
+        let tcp = if let Some(TransportSlice::Tcp(value)) = &packet.transport {
+            value
+        } else {
+            self.state = StreamState::Broken;
+            return finished_packets;
+        };
+
+        if tcp.checksum()
+            != tcp
+                .calc_checksum_ipv4(&ip, packet.payload)
+                .expect("calc checksum")
+        {
+            log::warn!("{:?} Wrong checksum discard...", self.identifier);
+            return finished_packets;
+        }
+
+        let old_state = self.state;
+        self.state = old_state.update(&tcp);
+
+        if old_state != self.state {
+            log::info!(
+                "{:?} state change: {:?}->{:?}",
+                self.identifier,
+                old_state,
+                self.state
+            );
+        }
+
+        if old_state == StreamState::Sent_SYN && self.state == StreamState::Established {
+            self.sequence_number = SerialNumber(tcp.sequence_number());
+            log::info!(
+                "Established stream with sequence number: {}",
+                tcp.sequence_number()
+            );
+        }
+
+        //packet potentielly contains data
+        if let StreamState::Established = old_state {
+            // no new data
+            if SerialNumber(tcp.sequence_number() + packet.payload.len() as u32) < self.sequence_number
+            {
+                return finished_packets;
+            }
+            let mut tcp = tcp.to_header();
+            let mut payload = packet.payload.to_vec();
+            // sequence number is lower then the one we currently have, so we don't need all data
+            // of this chunk
+            if SerialNumber(tcp.sequence_number) < self.sequence_number {
+                // correct fragment to only contain new data, including tcp header and payload vector..
+                let diff = self.sequence_number.0 - tcp.sequence_number;
+                tcp.sequence_number = self.sequence_number.0;
+                payload.drain((0..diff as usize));
+            }
+            // check if we can insert fragment
+            match self.fragments.get_mut(&tcp.sequence_number) {
+                Some(fragment) => {
+                    if fragment.payload.len() < payload.len() {
+                        fragment.payload = payload;
+                        fragment.tcp = tcp;
+                    }
+                }
+                None => {
+                    self.fragments.insert(tcp.sequence_number, Fragment { tcp, payload });
+                }
+            }
+        }
+
+        // new packet may have filled the missing data, check if can get data from out of order packets
+        self.process_fragments();
+
+        finished_packets
+    }
+
+    fn process_fragments(&mut self) {
+        let mut sequence_number = SerialNumber(0);
+        let mut buffer = Vec::new();
+        std::mem::swap(&mut self.sequence_number, &mut sequence_number);
+        std::mem::swap(&mut self.buffer, &mut buffer);
+
+        self.fragments.retain(|&key, item| {
+            if SerialNumber(key) > sequence_number {
+                // too large we are missing data
+                return false;
+            }
+            if SerialNumber(key) < sequence_number {
+                // sequence number is smaller, check if it contains usable data
+                if sequence_number < SerialNumber(key + item.payload.len() as u32) {
+                    item.payload.drain((0..(sequence_number.0-key) as usize));
+                    sequence_number.0 += item.payload.len() as u32;
+                    buffer.append(&mut item.payload);
+                } else {
+                    return false;
+                }
+            } else {
+                // sequence numbers are equal simly add this packet
+                sequence_number.0 += item.payload.len() as u32;
+                buffer.append(&mut item.payload)
+            }
+            if item.tcp.psh && buffer.len() != 0 {
+                // TODO: push buffer
+                log::info!("Would have pushed {} bytes", buffer.len());
+                buffer.drain((..));
+            }
+            // remove from map
+            true
+        });
+
+        std::mem::swap(&mut self.sequence_number, &mut sequence_number);
+        std::mem::swap(&mut self.buffer, &mut buffer);
+    }
+
+}
+
 /// NetPacket is used to reconstruct Tcp Packets from IP Packets
 struct NetPacket {
-    direction: crate::packet::Direction,
-    stream_id: u16,
+    identifier: StreamIdentifier,
     payload: Vec<u8>,
 }
 
 impl NetPacket {
-    pub fn new(payload_slice: &[u8], direction: Direction, stream_id: u16) -> Self {
+    pub fn new(payload_slice: &[u8], identifier: StreamIdentifier) -> Self {
         let mut payload = Vec::with_capacity(payload_slice.len());
         payload.extend_from_slice(&payload_slice[..]);
 
         NetPacket {
-            direction,
+            identifier,
             payload,
-            stream_id,
         }
     }
 
@@ -98,371 +361,8 @@ impl NetPacket {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum ConnectionState {
-    Handshake(u8),
-    Connected,
-    Closed,
-}
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum StreamChannelState {
-    Normal,
-    Recover,
-    Finished(bool),
-    Broken,
-}
-
-struct StreamChannel {
-    packet_buffer: HashMap<u32, (TcpHeader, Vec<u8>)>,
-    count: usize,
-    state: StreamChannelState,
-    sequence_number: u32,
-    next_sequence_number: u32,
-    acknowledgment_number: u32,
-    current_packet: Option<NetPacket>,
-}
-
-impl StreamChannel {
-    fn new(tcp: &TcpHeaderSlice) -> StreamChannel {
-        StreamChannel {
-            packet_buffer: HashMap::new(),
-            count: 1,
-            state: StreamChannelState::Normal,
-            sequence_number: tcp.sequence_number(),
-            next_sequence_number: (tcp.sequence_number() + 1) % std::u32::MAX,
-            acknowledgment_number: tcp.acknowledgment_number(),
-            current_packet: None,
-        }
-    }
-
-    fn finish_handshake(&mut self, tcp: &TcpHeaderSlice) {
-        self.count += 1;
-        self.sequence_number = tcp.sequence_number();
-        self.next_sequence_number = (tcp.sequence_number()) % std::u32::MAX;
-        self.acknowledgment_number = tcp.acknowledgment_number();
-    }
-
-    // updates sequence numbers etc...
-    fn update(&mut self, packet: &SlicedPacket) -> Vec<NetPacket> {
-        let mut packets = Vec::new();
-        self.count += 1;
-        let tcp = if let Some(TransportSlice::Tcp(value)) = &packet.transport {
-            value
-        } else {
-            log::warn!("Got packet which transport layer was not TCP discarding...");
-            panic!("Couldn't get tcp header, this should never happen here");
-        };
-
-        let log_prefix = tcp_to_string(&tcp.to_header());
-
-        self.state = match self.state {
-            // everything is normal just check
-            StreamChannelState::Normal => {
-                if self.next_sequence_number == tcp.sequence_number() {
-                    // update internal state
-                    self.sequence_number = tcp.sequence_number();
-                    self.next_sequence_number =
-                        (tcp.sequence_number() + packet.payload.len() as u32) % std::u32::MAX;
-                    self.acknowledgment_number = tcp.acknowledgment_number();
-
-                    // construct packet
-                    match self.current_packet.as_mut() {
-                        Some(net_packet) => {
-                            net_packet.append_payload(packet.payload);
-                        }
-                        None => {
-                            let (direction, stream_id) =
-                                ports_to_direction(tcp.source_port(), tcp.destination_port());
-                            self.current_packet =
-                                Some(NetPacket::new(packet.payload, direction, stream_id));
-                        }
-                    }
-
-                    if tcp.psh() {
-                        if let Some(net_packet) = self.current_packet.take() {
-                            packets.push(net_packet);
-                        } else {
-                            log::warn!(
-                                "{} Tried to push net_packet even tho it was None",
-                                log_prefix
-                            );
-                        }
-                    }
-
-                    if tcp.fin() {
-                        self.next_sequence_number = (tcp.sequence_number() + 1) % std::u32::MAX;
-                        StreamChannelState::Finished(false)
-                    } else {
-                        StreamChannelState::Normal
-                    }
-                } else if self.next_sequence_number > tcp.sequence_number() {
-                    log::warn!("Duplicate packet ignoring...");
-                    StreamChannelState::Normal
-                } else {
-                    if packet.payload.len() != 0 {
-                        self.packet_buffer.insert(
-                            tcp.sequence_number(),
-                            (tcp.to_header(), packet.payload.to_owned()),
-                        );
-                        log::warn!(
-                        "{} [Entering Recover State] Wrong sequence number... expected: {}, got: {}",
-                        log_prefix,
-                        self.next_sequence_number,
-                        tcp.sequence_number()
-                        );
-                        StreamChannelState::Recover
-                    } else {
-                        // something is wrong, but as this is a packet without payload just ignore it
-                        StreamChannelState::Normal
-                    }
-                }
-            }
-            StreamChannelState::Recover => {
-                if self.next_sequence_number == tcp.sequence_number() {
-                    // found the missing packet
-                    let mut last_tcp = tcp.clone();
-
-                    // update internal state
-                    self.sequence_number = tcp.sequence_number();
-                    self.next_sequence_number =
-                        (tcp.sequence_number() + packet.payload.len() as u32) % std::u32::MAX;
-                    self.acknowledgment_number = tcp.acknowledgment_number();
-                    log::info!(
-                        "{} Found currently missing packet with seq: {}, next: {}",
-                        log_prefix,
-                        tcp.sequence_number(),
-                        self.next_sequence_number
-                    );
-
-                    // construct packet
-                    match self.current_packet.as_mut() {
-                        Some(net_packet) => {
-                            net_packet.append_payload(packet.payload);
-                        }
-                        None => {
-                            let (direction, stream_id) =
-                                ports_to_direction(tcp.source_port(), tcp.destination_port());
-                            self.current_packet =
-                                Some(NetPacket::new(packet.payload, direction, stream_id));
-                        }
-                    }
-
-                    if tcp.psh() {
-                        if let Some(net_packet) = self.current_packet.take() {
-                            packets.push(net_packet);
-                        } else {
-                            log::warn!(
-                                "{} Tried to push net_packet even tho it was None",
-                                log_prefix
-                            );
-                        }
-                    }
-
-                    // try to empty packet buffer
-                    while let Some((tcp, payload)) =
-                        self.packet_buffer.remove(&self.next_sequence_number)
-                    {
-                        let mut last_tcp = tcp.clone();
-                        // update internal state
-                        self.sequence_number = tcp.sequence_number;
-                        self.next_sequence_number =
-                            (tcp.sequence_number + payload.len() as u32) % std::u32::MAX;
-                        self.acknowledgment_number = tcp.acknowledgment_number;
-                        log::info!(
-                            "{} Found currently missing packet with seq: {}, next: {}",
-                            log_prefix,
-                            tcp.sequence_number,
-                            self.next_sequence_number
-                        );
-
-                        // construct packet
-                        match self.current_packet.as_mut() {
-                            Some(net_packet) => {
-                                net_packet.append_payload(&payload);
-                            }
-                            None => {
-                                let (direction, stream_id) =
-                                    ports_to_direction(tcp.source_port, tcp.destination_port);
-                                self.current_packet =
-                                    Some(NetPacket::new(&payload, direction, stream_id));
-                            }
-                        }
-                    }
-
-                    // still missing packets for full recovery...
-                    if self.packet_buffer.is_empty() {
-                        log::warn!("{} [Exiting Recover State]", log_prefix);
-                        if last_tcp.fin() {
-                            self.next_sequence_number = (tcp.sequence_number() + 1) % std::u32::MAX;
-                            StreamChannelState::Finished(false)
-                        } else {
-                            StreamChannelState::Normal
-                        }
-                    } else {
-                        StreamChannelState::Recover
-                    }
-                } else if self.next_sequence_number > tcp.sequence_number() {
-                    log::warn!(
-                        "{} Duplicate packet ignoring...seq: {}",
-                        log_prefix,
-                        tcp.sequence_number()
-                    );
-                    StreamChannelState::Recover
-                } else {
-                    // check if we got this packet before inserting into packet buffer, only insert packets with payload
-                    if !self.packet_buffer.contains_key(&tcp.sequence_number())
-                        && packet.payload.len() != 0
-                    {
-                        self.packet_buffer.insert(
-                            tcp.sequence_number(),
-                            (tcp.to_header(), packet.payload.to_owned()),
-                        );
-                    }
-                    StreamChannelState::Recover
-                }
-            }
-            StreamChannelState::Finished(false) => {
-                // got acknowledgment?
-                if self.next_sequence_number == tcp.sequence_number() {
-                    // everything is good got last packet on this stream
-                    log::info!("{} closed connection", log_prefix);
-                    StreamChannelState::Finished(true)
-                } else {
-                    StreamChannelState::Broken
-                }
-            }
-            StreamChannelState::Finished(true) => {
-                // should not happen?
-                StreamChannelState::Broken
-            }
-            StreamChannelState::Broken => StreamChannelState::Broken,
-        };
-
-        packets
-    }
-}
-
-struct StreamData {
-    channel_in: Option<StreamChannel>,
-    channel_out: StreamChannel,
-    to_out: u16,
-    id: u16,
-    state: ConnectionState,
-}
-
-impl StreamData {
-    fn from_tcp_slice(tcp: &TcpHeaderSlice, id: u16) -> Self {
-        StreamData {
-            channel_in: None,
-            channel_out: StreamChannel::new(tcp),
-            to_out: tcp.destination_port(),
-            id,
-            state: ConnectionState::Handshake(0),
-        }
-    }
-
-    // handles handshake
-    fn process(&mut self, packet: SlicedPacket) -> Vec<NetPacket> {
-        let mut result = Vec::new();
-        let tcp = if let Some(TransportSlice::Tcp(packet)) = &packet.transport {
-            packet
-        } else {
-            log::warn!("Got packet which transport layer was not TCP discarding...");
-            return result;
-        };
-        self.state = match self.state {
-            // TODO: move HANDSHAKE to StreamChannel
-            ConnectionState::Handshake(step) => {
-                match step {
-                    0 => {
-                        // SYN ACK packet to in
-                        if self.to_out == tcp.source_port() {
-                            log::trace!("Second step of handshake");
-                            let mut channel_in = StreamChannel::new(tcp);
-
-                            if self.channel_out.next_sequence_number == tcp.acknowledgment_number()
-                            {
-                                self.channel_in = Some(channel_in);
-
-                                ConnectionState::Handshake(step + 1)
-                            } else {
-                                log::warn!("Wrong acknowledgment number1...");
-                                ConnectionState::Closed
-                            }
-                        } else {
-                            log::warn!("Wrong source port...");
-                            ConnectionState::Closed
-                        }
-                    }
-                    1 => {
-                        // ACK packet to out
-                        if self.to_out == tcp.destination_port() {
-                            log::trace!("Third step of handshake");
-                            if self.channel_in.as_ref().unwrap().next_sequence_number
-                                == tcp.acknowledgment_number()
-                            {
-                                self.channel_out.finish_handshake(&tcp);
-                                ConnectionState::Connected
-                            } else {
-                                log::warn!(
-                                    "Wrong acknowledgment number2... expected: {}, got: {}",
-                                    self.channel_in.as_ref().unwrap().next_sequence_number,
-                                    tcp.acknowledgment_number()
-                                );
-                                ConnectionState::Closed
-                            }
-                        } else {
-                            log::warn!("Wrong source port...");
-                            ConnectionState::Closed
-                        }
-                    }
-                    _ => {
-                        log::warn!("Something went wrong on handshake in stream");
-                        ConnectionState::Handshake(step)
-                    }
-                }
-            }
-            ConnectionState::Connected => {
-                // forward packets to correct channel
-                if self.to_out == tcp.destination_port() {
-                    let mut new_packets = self.channel_out.update(&packet);
-                    result.append(&mut new_packets);
-                //                    if self.channel_out.state == StreamChannelState::Finished {
-                //                        ConnectionState::Broken
-                //                    } else {
-                //                        ConnectionState::Connected
-                //                    }
-                } else {
-                    let mut new_packets = self.channel_in.as_mut().unwrap().update(&packet);
-                    result.append(&mut new_packets);
-                    //                    if self.channel_in.as_mut().unwrap().state == StreamChannelState::Finished {
-                    //                        ConnectionState::Broken
-                    //                    } else {
-                    //                        ConnectionState::Connected
-                    //                    }
-                }
-                // check channel state
-                let out_state = self.channel_out.state;
-                let in_state = self.channel_in.as_ref().unwrap().state;
-                if (out_state == StreamChannelState::Finished(true)
-                    || out_state == StreamChannelState::Broken)
-                    && (in_state == StreamChannelState::Finished(true)
-                        || in_state == StreamChannelState::Broken)
-                {
-                    ConnectionState::Closed
-                } else {
-                    ConnectionState::Connected
-                }
-            }
-            ConnectionState::Closed => ConnectionState::Closed,
-        };
-        result
-    }
-}
-
 pub struct StreamReassembly {
-    stream_data: HashMap<u16, StreamData>,
+    stream_data: HashMap<StreamIdentifier, Stream>,
 }
 
 impl StreamReassembly {
@@ -479,101 +379,26 @@ impl StreamReassembly {
             Err(e) => log::warn!("Err {:?} --- discarding packet", e),
             Ok(packet) => {
                 let packet_clone = packet.clone();
-                let ip = if let Some(InternetSlice::Ipv4(value)) = packet.ip {
-                    value
-                } else {
-                    log::warn!("Got packet which transport layer was not TCP discarding...");
-                    return packets;
-                };
-                let tcp = if let Some(TransportSlice::Tcp(value)) = packet.transport {
-                    value
-                } else {
-                    log::warn!("Got packet which transport layer was not TCP discarding...");
-                    return packets;
-                };
-
-                if tcp.checksum()
-                    != tcp
-                        .calc_checksum_ipv4(&ip, packet.payload)
-                        .expect("calc checksum")
-                {
-                    log::warn!("{} Wrong checksum", tcp_to_string(&tcp.to_header()));
-                }
-
-                let (_, stream_id) = ports_to_direction(tcp.source_port(), tcp.destination_port());
-
-                // first packet of handshake
-                if tcp.syn() && !tcp.ack() {
-                    let old = self.stream_data.remove(&stream_id);
-                    if let Some(_) = old {
-                        log::warn!("Still had data on old stream with id {0}, when receiving new stream with id {0}", stream_id);
-                    }
-                    log::info!("Added connection with id {}", stream_id);
-                    self.stream_data
-                        .insert(stream_id, StreamData::from_tcp_slice(&tcp, stream_id));
-                }
-
-                // process packets of a connection, including finishing of the handshake
-                if tcp.ack() || tcp.psh() || tcp.fin() {
-                    match self.stream_data.get_mut(&stream_id) {
-                        Some(stream) => {
-                            let new_packets = stream.process(packet_clone);
-                            let mut poe_packets = new_packets
-                                .into_iter()
-                                .map(|net_packet| {
-                                    let ip = match net_packet.direction {
-                                        Direction::FromLoginserver | Direction::FromGameserver => {
-                                            ip.source_addr()
-                                        }
-                                        Direction::ToLoginserver | Direction::ToGameserver => {
-                                            ip.destination_addr()
-                                        }
-                                    };
-                                    PoePacket::new(
-                                        &net_packet.payload,
-                                        net_packet.direction,
-                                        ip,
-                                        net_packet.stream_id,
-                                    )
-                                })
-                                .collect();
-                            packets.append(&mut poe_packets);
-                            if stream.state == ConnectionState::Closed {
-                                if self.stream_data.remove(&stream_id).is_some() {
-                                    log::info!("Removed connection with id {}", stream_id);
-                                }
-                            }
-                        }
+                if let Some(identifier) = StreamIdentifier::from_sliced_packet(&packet) {
+                    let new_packets = match self.stream_data.get_mut(&identifier) {
+                        Some(stream) => stream.process(packet_clone),
                         None => {
-                            // most likly happens after we remove a connection on its first FIN packet
-                            // log::warn!("Tried to process packet without existing Stream, probably ACK of FIN?: {:?}", tcp.to_header());
+                            let mut stream = Stream::new(identifier);
+                            let packets = stream.process(packet_clone);
+                            self.stream_data.insert(identifier, stream);
+                            packets
                         }
                     };
+                    let mut poe_packets = new_packets
+                        .into_iter()
+                        .map(|net_packet| {
+                            PoePacket::new(&net_packet.payload, net_packet.identifier)
+                        })
+                        .collect();
+                    packets.append(&mut poe_packets);
                 }
             }
         }
         packets
     }
-}
-
-// This assumes that the source and destination port are not the same, which should be
-// depending on the Ephemeral port range the case.
-fn ports_to_direction(source_port: u16, destination_port: u16) -> (Direction, u16) {
-    if source_port == 20481 {
-        (Direction::FromLoginserver, destination_port)
-    } else if destination_port == 20481 {
-        (Direction::ToLoginserver, source_port)
-    } else if source_port == 6112 {
-        (Direction::FromGameserver, destination_port)
-    } else if destination_port == 6112 {
-        (Direction::ToGameserver, source_port)
-    } else {
-        // TODO: handle this error better
-        panic!("Tried to create PoePacket from unknown port");
-    }
-}
-
-fn tcp_to_string(tcp: &TcpHeader) -> String {
-    let (direction, stream_id) = ports_to_direction(tcp.source_port, tcp.destination_port);
-    format!("{} [{}]", direction, stream_id).to_string()
 }

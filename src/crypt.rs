@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 
+use crate::caputre_packets::StreamIdentifier;
 use crate::packet::{Direction, PoePacket};
 use byteorder::{ByteOrder, NetworkEndian};
 use crypto::salsa20::Salsa20;
@@ -39,7 +40,7 @@ impl Connection {
 
 pub struct Session {
     keystore: HashMap<u32, KeyPair>,
-    connections: HashMap<u16, RefCell<Connection>>,
+    connections: HashMap<StreamIdentifier, RefCell<Connection>>,
 }
 
 impl Session {
@@ -86,7 +87,7 @@ impl Session {
     }
 
     pub fn process(&mut self, mut packet: &mut PoePacket) -> Result<(), Error> {
-        match packet.direction {
+        match packet.identifier.into() {
             Direction::FromGameserver | Direction::ToGameserver => {
                 self.handle_gamepacket(&mut packet)?;
             }
@@ -98,21 +99,21 @@ impl Session {
     }
 
     fn handle_gamepacket(&mut self, packet: &mut PoePacket) -> Result<(), Error> {
-        if !self.connections.contains_key(&packet.stream_id) {
+        if !self.connections.contains_key(&packet.identifier) {
             self.connections
-                .insert(packet.stream_id, RefCell::new(Connection::new()));
+                .insert(packet.identifier, RefCell::new(Connection::new()));
         }
 
         let mut conn = self
             .connections
-            .get(&packet.stream_id)
+            .get(&packet.identifier)
             .unwrap()
             .borrow_mut();
         let mut remove_conn = false;
 
         match conn.state {
             State::Login => {
-                if Direction::ToGameserver == packet.direction {
+                if Direction::ToGameserver == packet.identifier.into() {
                     match conn.send {
                         0 => {
                             if packet.payload.len() < 6 {
@@ -158,7 +159,7 @@ impl Session {
                 }
             }
             State::DetectingStateChange => {
-                if Direction::ToGameserver == packet.direction {
+                if Direction::ToGameserver == packet.identifier.into() {
                     if let Some((ref mut send, _)) = conn.cipher {
                         let mut output: Vec<u8> = vec![0u8; packet.payload.len()];
                         send.process(&packet.payload[..], &mut output[..]);
@@ -214,28 +215,28 @@ impl Session {
         if remove_conn {
             self.keystore.remove(&conn.id);
             std::mem::drop(conn);
-            self.connections.remove(&packet.stream_id);
+            self.connections.remove(&packet.identifier);
         }
 
         Ok(())
     }
 
     fn handle_loginpacket(&mut self, packet: &mut PoePacket) -> Result<(), Error> {
-        if !self.connections.contains_key(&packet.stream_id) {
+        if !self.connections.contains_key(&packet.identifier) {
             self.connections
-                .insert(packet.stream_id, RefCell::new(Connection::new()));
+                .insert(packet.identifier, RefCell::new(Connection::new()));
         }
 
         let mut conn = self
             .connections
-            .get(&packet.stream_id)
+            .get(&packet.identifier)
             .unwrap()
             .borrow_mut();
         let mut remove_conn = false;
 
         match conn.state {
             State::Login => {
-                if Direction::ToLoginserver == packet.direction {
+                if Direction::ToLoginserver == packet.identifier.into() {
                     match conn.send {
                         // unencrypted to nothing
                         0 => {
@@ -326,7 +327,7 @@ impl Session {
                 }
             }
             State::DetectingStateChange => {
-                if Direction::ToLoginserver == packet.direction {
+                if Direction::ToLoginserver == packet.identifier.into() {
                     if let Some((ref mut send, _)) = conn.cipher {
                         let mut output: Vec<u8> = vec![0u8; packet.payload.len()];
                         send.process(&packet.payload[..], &mut output[..]);
@@ -382,7 +383,7 @@ impl Session {
         if remove_conn {
             self.keystore.remove(&conn.id);
             std::mem::drop(conn);
-            self.connections.remove(&packet.stream_id);
+            self.connections.remove(&packet.identifier);
         }
 
         Ok(())
