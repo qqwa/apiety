@@ -7,7 +7,6 @@ use std::sync::mpsc;
 
 use pcap::{Capture, Device, Packet};
 
-use crate::caputre_packets::StreamChannelState::Normal;
 use crate::packet::{Direction, PoePacket};
 use crate::Error;
 
@@ -103,14 +102,15 @@ impl NetPacket {
 enum ConnectionState {
     Handshake(u8),
     Connected,
-    Broken,
+    Closed,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum StreamChannelState {
     Normal,
     Recover,
-    Finished,
+    Finished(bool),
+    Broken,
 }
 
 struct StreamChannel {
@@ -186,7 +186,8 @@ impl StreamChannel {
                     }
 
                     if tcp.fin() {
-                        StreamChannelState::Finished
+                        self.next_sequence_number = (tcp.sequence_number() + 1) % std::u32::MAX;
+                        StreamChannelState::Finished(false)
                     } else {
                         StreamChannelState::Normal
                     }
@@ -274,7 +275,8 @@ impl StreamChannel {
                     if self.packet_buffer.is_empty() {
                         log::warn!("[Exiting Recover State]");
                         if last_tcp.fin() {
-                            StreamChannelState::Finished
+                            self.next_sequence_number = (tcp.sequence_number() + 1) % std::u32::MAX;
+                            StreamChannelState::Finished(false)
                         } else {
                             StreamChannelState::Normal
                         }
@@ -295,7 +297,20 @@ impl StreamChannel {
                     StreamChannelState::Recover
                 }
             }
-            StreamChannelState::Finished => StreamChannelState::Finished,
+            StreamChannelState::Finished(false) => {
+                // got acknowledgment?
+                if self.next_sequence_number == tcp.sequence_number() {
+                    // everything is good got last packet on this stream
+                    StreamChannelState::Finished(true)
+                } else {
+                    StreamChannelState::Broken
+                }
+            }
+            StreamChannelState::Finished(true) => {
+                // should not happen?
+                StreamChannelState::Broken
+            }
+            StreamChannelState::Broken => StreamChannelState::Broken,
         };
 
         packets
@@ -331,6 +346,7 @@ impl StreamData {
             return result;
         };
         self.state = match self.state {
+            // TODO: move HANDSHAKE to StreamChannel
             ConnectionState::Handshake(step) => {
                 match step {
                     0 => {
@@ -346,11 +362,11 @@ impl StreamData {
                                 ConnectionState::Handshake(step + 1)
                             } else {
                                 log::warn!("Wrong acknowledgment number1...");
-                                ConnectionState::Broken
+                                ConnectionState::Closed
                             }
                         } else {
                             log::warn!("Wrong source port...");
-                            ConnectionState::Broken
+                            ConnectionState::Closed
                         }
                     }
                     1 => {
@@ -368,11 +384,11 @@ impl StreamData {
                                     self.channel_in.as_ref().unwrap().next_sequence_number,
                                     tcp.acknowledgment_number()
                                 );
-                                ConnectionState::Broken
+                                ConnectionState::Closed
                             }
                         } else {
                             log::warn!("Wrong source port...");
-                            ConnectionState::Broken
+                            ConnectionState::Closed
                         }
                     }
                     _ => {
@@ -382,25 +398,34 @@ impl StreamData {
                 }
             }
             ConnectionState::Connected => {
+                // forward packets to correct channel
                 if self.to_out == tcp.destination_port() {
                     let mut new_packets = self.channel_out.update(&packet);
                     result.append(&mut new_packets);
-                    if self.channel_out.state == StreamChannelState::Finished {
-                        ConnectionState::Broken
-                    } else {
-                        ConnectionState::Connected
-                    }
+//                    if self.channel_out.state == StreamChannelState::Finished {
+//                        ConnectionState::Broken
+//                    } else {
+//                        ConnectionState::Connected
+//                    }
                 } else {
                     let mut new_packets = self.channel_in.as_mut().unwrap().update(&packet);
                     result.append(&mut new_packets);
-                    if self.channel_in.as_mut().unwrap().state == StreamChannelState::Finished {
-                        ConnectionState::Broken
-                    } else {
-                        ConnectionState::Connected
-                    }
+//                    if self.channel_in.as_mut().unwrap().state == StreamChannelState::Finished {
+//                        ConnectionState::Broken
+//                    } else {
+//                        ConnectionState::Connected
+//                    }
+                }
+                // check channel state
+                let out_state = self.channel_out.state;
+                let in_state = self.channel_in.as_ref().unwrap().state;
+                if (out_state == StreamChannelState::Finished(true) || out_state == StreamChannelState::Broken) && (in_state == StreamChannelState::Finished(true) || in_state == StreamChannelState::Broken) {
+                    ConnectionState::Closed
+                } else {
+                    ConnectionState::Connected
                 }
             }
-            ConnectionState::Broken => ConnectionState::Broken,
+            ConnectionState::Closed => ConnectionState::Closed,
         };
         result
     }
@@ -476,7 +501,7 @@ impl StreamReassembly {
                                 })
                                 .collect();
                             packets.append(&mut poe_packets);
-                            if stream.state == ConnectionState::Broken {
+                            if stream.state == ConnectionState::Closed {
                                 if self.stream_data.remove(&stream_id).is_some() {
                                     log::info!("Removed connection with id {}", stream_id);
                                 }
