@@ -1,5 +1,5 @@
 pub mod caputre_packets;
-mod crypt;
+pub mod crypt;
 pub mod decrypter;
 pub mod mem;
 mod packet;
@@ -43,7 +43,7 @@ pub fn decrypted_stream() -> Receiver<PoePacket> {
                     Ok(ref mut packet) => {
                         let mut tries = 0;
                         'inner: loop {
-                            let result = session.handle(packet);
+                            let result = session.process(packet);
                             match result {
                                 Ok(()) => {
                                     packet_tx.send(packet.clone()).unwrap();
@@ -73,7 +73,7 @@ pub fn decrypted_stream() -> Receiver<PoePacket> {
 
                                             match (key1, key2) {
                                                 (Some(key1), Some(key2)) => {
-                                                    match session.add_key(&key1[..], &key2[..]) {
+                                                    match session.add_keypair(&key1[..], &key2[..]) {
                                                         Ok(()) => {
                                                             tries += 1;
                                                             continue 'inner;

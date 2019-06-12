@@ -31,10 +31,19 @@ pub fn capture_from_interface(sender: mpsc::Sender<Vec<u8>>) -> Result<(), Error
                 cap.filter("tcp port 20481 or tcp port 6112")
                     .expect("capture filter");
 
-                while let Ok(packet) = cap.next() {
-                    sender
-                        .send(Vec::from(packet.data))
-                        .expect("send packet from caputre thread");
+                loop {
+                    match cap.next() {
+                        Ok(packet) => {
+                            sender
+                                .send(Vec::from(packet.data))
+                                .expect("send packet from caputre thread");
+                        }
+                        Err(pcap::Error::TimeoutExpired) => {},
+                        Err(e) => {
+                            log::warn!("{:?}", e);
+                            break;
+                        }
+                    }
                 }
             })
             .unwrap();
@@ -90,15 +99,18 @@ impl NetPacket {
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum ConnectionState {
     Handshake(u8),
     Connected,
     Broken,
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum StreamChannelState {
     Normal,
     Recover,
+    Finished,
 }
 
 struct StreamChannel {
@@ -173,32 +185,43 @@ impl StreamChannel {
                         }
                     }
 
-                    StreamChannelState::Normal
+                    if tcp.fin() {
+                        StreamChannelState::Finished
+                    } else {
+                        StreamChannelState::Normal
+                    }
                 } else if self.next_sequence_number > tcp.sequence_number() {
                     log::warn!("Duplicate packet ignoring...");
                     StreamChannelState::Normal
                 } else {
-                    self.packet_buffer.insert(
-                        tcp.sequence_number(),
-                        (tcp.to_header(), packet.payload.to_owned()),
-                    );
-                    log::warn!(
+                    if packet.payload.len() != 0 {
+                        self.packet_buffer.insert(
+                            tcp.sequence_number(),
+                            (tcp.to_header(), packet.payload.to_owned()),
+                        );
+                        log::warn!(
                         "[Entering Recover State] Wrong sequence number... expected: {}, got: {}",
                         self.next_sequence_number,
                         tcp.sequence_number()
-                    );
-                    StreamChannelState::Recover
+                        );
+                        StreamChannelState::Recover
+                    } else {
+                        // something is wrong, but as this is a packet without payload just ignore it
+                        StreamChannelState::Normal
+                    }
                 }
             }
             StreamChannelState::Recover => {
                 if self.next_sequence_number == tcp.sequence_number() {
                     // found the missing packet
+                    let mut last_tcp = tcp.clone();
 
                     // update internal state
                     self.sequence_number = tcp.sequence_number();
                     self.next_sequence_number =
                         (tcp.sequence_number() + packet.payload.len() as u32) % std::u32::MAX;
                     self.acknowledgment_number = tcp.acknowledgment_number();
+                    log::info!("Found currently missing packet with seq: {}, next: {}", tcp.sequence_number(), self.next_sequence_number);
 
                     // construct packet
                     match self.current_packet.as_mut() {
@@ -225,11 +248,13 @@ impl StreamChannel {
                     while let Some((tcp, payload)) =
                         self.packet_buffer.remove(&self.next_sequence_number)
                     {
+                        let mut last_tcp = tcp.clone();
                         // update internal state
                         self.sequence_number = tcp.sequence_number;
                         self.next_sequence_number =
                             (tcp.sequence_number + payload.len() as u32) % std::u32::MAX;
                         self.acknowledgment_number = tcp.acknowledgment_number;
+                        log::info!("Found currently missing packet with seq: {}, next: {}", tcp.sequence_number, self.next_sequence_number);
 
                         // construct packet
                         match self.current_packet.as_mut() {
@@ -248,7 +273,11 @@ impl StreamChannel {
                     // still missing packets for full recovery...
                     if self.packet_buffer.is_empty() {
                         log::warn!("[Exiting Recover State]");
-                        StreamChannelState::Normal
+                        if last_tcp.fin() {
+                            StreamChannelState::Finished
+                        } else {
+                            StreamChannelState::Normal
+                        }
                     } else {
                         StreamChannelState::Recover
                     }
@@ -256,8 +285,8 @@ impl StreamChannel {
                     log::warn!("Duplicate packet ignoring...");
                     StreamChannelState::Recover
                 } else {
-                    // check if we got this packet before inserting into packet buffer
-                    if !self.packet_buffer.contains_key(&tcp.sequence_number()) {
+                    // check if we got this packet before inserting into packet buffer, only insert packets with payload
+                    if !self.packet_buffer.contains_key(&tcp.sequence_number()) && packet.payload.len() != 0 {
                         self.packet_buffer.insert(
                             tcp.sequence_number(),
                             (tcp.to_header(), packet.payload.to_owned()),
@@ -266,6 +295,7 @@ impl StreamChannel {
                     StreamChannelState::Recover
                 }
             }
+            StreamChannelState::Finished => StreamChannelState::Finished,
         };
 
         packets
@@ -355,11 +385,19 @@ impl StreamData {
                 if self.to_out == tcp.destination_port() {
                     let mut new_packets = self.channel_out.update(&packet);
                     result.append(&mut new_packets);
-                    ConnectionState::Connected
+                    if self.channel_out.state == StreamChannelState::Finished {
+                        ConnectionState::Broken
+                    } else {
+                        ConnectionState::Connected
+                    }
                 } else {
                     let mut new_packets = self.channel_in.as_mut().unwrap().update(&packet);
                     result.append(&mut new_packets);
-                    ConnectionState::Connected
+                    if self.channel_in.as_mut().unwrap().state == StreamChannelState::Finished {
+                        ConnectionState::Broken
+                    } else {
+                        ConnectionState::Connected
+                    }
                 }
             }
             ConnectionState::Broken => ConnectionState::Broken,
@@ -412,17 +450,9 @@ impl StreamReassembly {
                         .insert(stream_id, StreamData::from_tcp_slice(&tcp, stream_id));
                 }
 
-                // remove connection on first fin flag, connection will have 3 following packets to
-                // finish of closing the connection, 2 containing ACK, which will be ignored
-                if tcp.fin() {
-                    if self.stream_data.remove(&stream_id).is_some() {
-                        log::info!("Removed connection with id {}", stream_id);
-                    }
-                    return packets;
-                }
 
                 // process packets of a connection, including finishing of the handshake
-                if tcp.ack() || tcp.psh() {
+                if tcp.ack() || tcp.psh() || tcp.fin() {
                     match self.stream_data.get_mut(&stream_id) {
                         Some(stream) => {
                             let new_packets = stream.process(packet_clone);
@@ -446,12 +476,17 @@ impl StreamReassembly {
                                 })
                                 .collect();
                             packets.append(&mut poe_packets);
+                            if stream.state == ConnectionState::Broken {
+                                if self.stream_data.remove(&stream_id).is_some() {
+                                    log::info!("Removed connection with id {}", stream_id);
+                                }
+                            }
                         }
                         None => {
                             // most likly happens after we remove a connection on its first FIN packet
                             // log::warn!("Tried to process packet without existing Stream, probably ACK of FIN?: {:?}", tcp.to_header());
                         }
-                    }
+                    };
                 }
             }
         }

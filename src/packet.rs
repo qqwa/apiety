@@ -62,7 +62,7 @@ impl fmt::Display for PoePacket {
             f,
             "{}({}) id: {:02x?}, size: {}",
             self.direction,
-            self.ip,
+            self.stream_id,
             &self.payload[..2],
             self.payload.len()
         )

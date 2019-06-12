@@ -9,6 +9,7 @@ use crypto::symmetriccipher::SynchronousStreamCipher;
 use std::collections::HashMap;
 
 use crate::Error;
+use std::process::exit;
 
 #[derive(Eq, PartialEq)]
 enum State {
@@ -49,7 +50,7 @@ impl Session {
         }
     }
 
-    pub fn add_key(&mut self, buffer1: &[u8], buffer2: &[u8]) -> Result<(), crate::Error> {
+    pub fn add_keypair(&mut self, buffer1: &[u8], buffer2: &[u8]) -> Result<(), crate::Error> {
         if buffer1.len() != 64 || buffer2.len() != 64 {
             return Err(crate::Error::KeyWrongSize);
         }
@@ -84,7 +85,7 @@ impl Session {
         Ok(())
     }
 
-    pub fn handle(&mut self, mut packet: &mut PoePacket) -> Result<(), Error> {
+    pub fn process(&mut self, mut packet: &mut PoePacket) -> Result<(), Error> {
         match packet.direction {
             Direction::FromGameserver | Direction::ToGameserver => {
                 self.handle_gamepacket(&mut packet)?;

@@ -52,11 +52,14 @@ fn main() {
         }
     }
 
-    let mut decrypter = apiety::decrypter::Decrypter::new();
+//    let mut decrypter = apiety::decrypter::Decrypter::new();
+    let mut decrypter = apiety::crypt::Session::new();
     if let (Some(key_s), Some(key_r)) = (opt.key_s, opt.key_r) {
         let buffer1 = hex::decode(key_s).expect("Failed to decode key_s");
         let buffer2 = hex::decode(key_r).expect("Failed to decode key_r");
-        decrypter.add_keypair(&buffer1, &buffer2);
+        if let Err(e) = decrypter.add_keypair(&buffer1, &buffer2) {
+            log::warn!("{:?}", e);
+        }
     }
 
     let mut stream_reassembly = apiety::caputre_packets::StreamReassembly::new();
@@ -68,8 +71,9 @@ fn main() {
             Ok(packet) => {
                 // process packet into NetPacket, returns everytime it got a fully assembled packet in the right order
                 let mut packets = stream_reassembly.process(&packet);
-                for packet in packets {
-                    // decrypt
+                for mut packet in packets {
+                    decrypter.process(&mut packet);
+                    log::info!("{}", packet);
                 }
             }
             Err(e) => {
