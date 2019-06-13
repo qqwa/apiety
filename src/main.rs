@@ -54,26 +54,44 @@ fn main() {
 
     //    let mut decrypter = apiety::decrypter::Decrypter::new();
     let mut decrypter = apiety::crypt::Session::new();
-    if let (Some(key_s), Some(key_r)) = (opt.key_s, opt.key_r) {
+    if let (Some(key_s), Some(key_r)) = (&opt.key_s, &opt.key_r) {
         let buffer1 = hex::decode(key_s).expect("Failed to decode key_s");
         let buffer2 = hex::decode(key_r).expect("Failed to decode key_r");
         if let Err(e) = decrypter.add_keypair(&buffer1, &buffer2) {
             log::warn!("{:?}", e);
         }
     }
-
-    let mut stream_reassembly = apiety::caputre_packets::StreamReassembly::new();
+    let (tx, rx) = channel();
+    let mut stream_reassembly = apiety::caputre_packets::StreamReassembly::new(tx);
     let mut count = 0;
     //
     //    let (packets, control) = apiety::decrypted_stream();
     loop {
+        if opt.key_s.is_none() && count == 2 {
+            let pid = apiety::mem::get_process_pid("PathOfExile_x64.exe");
+            let prog = apiety::mem::ProcessMemory::new(pid);
+            let tmp_keys = prog.search(&b"expand 32-byte k"[..], 64, 1024);
+            decrypter.add_keypair(&tmp_keys[0], &tmp_keys[1]);
+        }
         match packets.recv() {
             Ok(packet) => {
                 // process packet into NetPacket, returns everytime it got a fully assembled packet in the right order
-                let mut packets = stream_reassembly.process(&packet);
-                for mut packet in packets {
-                    if let Ok(()) = decrypter.process(&mut packet) {
-                        log::info!("{}", packet);
+                stream_reassembly.process(&packet);
+                loop {
+                    match rx.try_recv() {
+                        Ok(mut packet) => {
+                            //                            log::info!("RAW: {}", packet);
+                            count += 1;
+                            match decrypter.process(&mut packet) {
+                                Ok(()) => log::info!("{}", packet),
+                                Err(e) => log::warn!("Err: {:?}", e),
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(e) => {
+                            log::error!("Err: {}", e);
+                            return;
+                        }
                     }
                 }
             }

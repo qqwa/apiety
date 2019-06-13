@@ -163,6 +163,9 @@ impl StreamState {
     fn update(&self, tcp: &TcpHeaderSlice) -> StreamState {
         use StreamState::*;
 
+        if tcp.syn() && tcp.ack() {
+            return Established;
+        }
         if tcp.fin() {
             return Sent_FIN;
         }
@@ -195,42 +198,37 @@ struct Stream {
     state: StreamState,
     sequence_number: SerialNumber,
     buffer: Vec<u8>,
+    sender: mpsc::Sender<PoePacket>,
 }
 
 impl Stream {
-    fn new(identifier: StreamIdentifier) -> Self {
+    fn new(identifier: StreamIdentifier, sender: mpsc::Sender<PoePacket>) -> Self {
         Stream {
             identifier,
             fragments: HashMap::new(),
             state: StreamState::Initial,
             sequence_number: SerialNumber(0),
             buffer: Vec::new(),
+            sender,
         }
     }
 
-    fn process(&mut self, packet: SlicedPacket) -> Vec<NetPacket> {
-        let mut finished_packets = Vec::new();
+    fn process(&mut self, packet: SlicedPacket) {
         if self.state == StreamState::Broken {
-            return finished_packets;
+            return;
         }
 
-        // process packet into headers
-        //        let packet = if let Ok(packet) = SlicedPacket::from_ethernet(&packet) {
-        //            packet
-        //        } else {
-        //            self.state =  StreamState::Broken;
-        //        };
         let ip = if let Some(InternetSlice::Ipv4(value)) = &packet.ip {
             value
         } else {
             self.state = StreamState::Broken;
-            return finished_packets;
+            return;
         };
         let tcp = if let Some(TransportSlice::Tcp(value)) = &packet.transport {
             value
         } else {
             self.state = StreamState::Broken;
-            return finished_packets;
+            return;
         };
 
         if tcp.checksum()
@@ -239,9 +237,10 @@ impl Stream {
                 .expect("calc checksum")
         {
             log::warn!("{:?} Wrong checksum discard...", self.identifier);
-            return finished_packets;
+            return;
         }
 
+        // TODO: we may change to Finished state even if some data is transferred if the FIN packet arrived out of order
         let old_state = self.state;
         self.state = old_state.update(&tcp);
 
@@ -254,8 +253,14 @@ impl Stream {
             );
         }
 
-        if old_state == StreamState::Sent_SYN && self.state == StreamState::Established {
+        if (old_state == StreamState::Sent_SYN || old_state == StreamState::Initial)
+            && self.state == StreamState::Established
+            && tcp.ack()
+        {
             self.sequence_number = SerialNumber(tcp.sequence_number());
+            if tcp.syn() && tcp.ack() {
+                self.sequence_number.0 += 1;
+            }
             log::info!(
                 "Established stream with sequence number: {}",
                 tcp.sequence_number()
@@ -265,9 +270,10 @@ impl Stream {
         //packet potentielly contains data
         if let StreamState::Established = old_state {
             // no new data
-            if SerialNumber(tcp.sequence_number() + packet.payload.len() as u32) < self.sequence_number
+            if SerialNumber(tcp.sequence_number() + packet.payload.len() as u32)
+                < self.sequence_number
             {
-                return finished_packets;
+                return;
             }
             let mut tcp = tcp.to_header();
             let mut payload = packet.payload.to_vec();
@@ -288,15 +294,14 @@ impl Stream {
                     }
                 }
                 None => {
-                    self.fragments.insert(tcp.sequence_number, Fragment { tcp, payload });
+                    self.fragments
+                        .insert(tcp.sequence_number, Fragment { tcp, payload });
                 }
             }
         }
 
         // new packet may have filled the missing data, check if can get data from out of order packets
         self.process_fragments();
-
-        finished_packets
     }
 
     fn process_fragments(&mut self) {
@@ -305,15 +310,18 @@ impl Stream {
         std::mem::swap(&mut self.sequence_number, &mut sequence_number);
         std::mem::swap(&mut self.buffer, &mut buffer);
 
+        let sender = &self.sender;
+        let identifier = &self.identifier;
+
         self.fragments.retain(|&key, item| {
             if SerialNumber(key) > sequence_number {
                 // too large we are missing data
-                return false;
+                return true;
             }
             if SerialNumber(key) < sequence_number {
                 // sequence number is smaller, check if it contains usable data
                 if sequence_number < SerialNumber(key + item.payload.len() as u32) {
-                    item.payload.drain((0..(sequence_number.0-key) as usize));
+                    item.payload.drain((0..(sequence_number.0 - key) as usize));
                     sequence_number.0 += item.payload.len() as u32;
                     buffer.append(&mut item.payload);
                 } else {
@@ -326,55 +334,35 @@ impl Stream {
             }
             if item.tcp.psh && buffer.len() != 0 {
                 // TODO: push buffer
-                log::info!("Would have pushed {} bytes", buffer.len());
+                //                log::info!("Would have pushed {} bytes", buffer.len());
+                let packet = PoePacket::new(&buffer[..], *identifier);
+                sender.send(packet).expect("failed to send NetPacket");
                 buffer.drain((..));
             }
             // remove from map
-            true
+            false
         });
 
         std::mem::swap(&mut self.sequence_number, &mut sequence_number);
         std::mem::swap(&mut self.buffer, &mut buffer);
     }
-
-}
-
-/// NetPacket is used to reconstruct Tcp Packets from IP Packets
-struct NetPacket {
-    identifier: StreamIdentifier,
-    payload: Vec<u8>,
-}
-
-impl NetPacket {
-    pub fn new(payload_slice: &[u8], identifier: StreamIdentifier) -> Self {
-        let mut payload = Vec::with_capacity(payload_slice.len());
-        payload.extend_from_slice(&payload_slice[..]);
-
-        NetPacket {
-            identifier,
-            payload,
-        }
-    }
-
-    pub fn append_payload(&mut self, payload: &[u8]) {
-        self.payload.extend_from_slice(payload);
-    }
 }
 
 pub struct StreamReassembly {
     stream_data: HashMap<StreamIdentifier, Stream>,
+    sender: mpsc::Sender<PoePacket>,
 }
 
 impl StreamReassembly {
-    pub fn new() -> Self {
+    pub fn new(sender: mpsc::Sender<PoePacket>) -> Self {
         StreamReassembly {
             stream_data: HashMap::new(),
+            sender,
         }
     }
 
-    pub fn process(&mut self, raw_packet: &[u8]) -> Vec<PoePacket> {
+    pub fn process(&mut self, raw_packet: &[u8]) {
         let sliced_packet = SlicedPacket::from_ethernet(&raw_packet);
-        let mut packets = Vec::new();
         match sliced_packet {
             Err(e) => log::warn!("Err {:?} --- discarding packet", e),
             Ok(packet) => {
@@ -383,22 +371,13 @@ impl StreamReassembly {
                     let new_packets = match self.stream_data.get_mut(&identifier) {
                         Some(stream) => stream.process(packet_clone),
                         None => {
-                            let mut stream = Stream::new(identifier);
-                            let packets = stream.process(packet_clone);
+                            let mut stream = Stream::new(identifier, self.sender.clone());
+                            stream.process(packet_clone);
                             self.stream_data.insert(identifier, stream);
-                            packets
                         }
                     };
-                    let mut poe_packets = new_packets
-                        .into_iter()
-                        .map(|net_packet| {
-                            PoePacket::new(&net_packet.payload, net_packet.identifier)
-                        })
-                        .collect();
-                    packets.append(&mut poe_packets);
                 }
             }
         }
-        packets
     }
 }

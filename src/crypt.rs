@@ -40,7 +40,7 @@ impl Connection {
 
 pub struct Session {
     keystore: HashMap<u32, KeyPair>,
-    connections: HashMap<StreamIdentifier, RefCell<Connection>>,
+    connections: HashMap<u16, RefCell<Connection>>,
 }
 
 impl Session {
@@ -99,14 +99,14 @@ impl Session {
     }
 
     fn handle_gamepacket(&mut self, packet: &mut PoePacket) -> Result<(), Error> {
-        if !self.connections.contains_key(&packet.identifier) {
+        if !self.connections.contains_key(&packet.stream_id()) {
             self.connections
-                .insert(packet.identifier, RefCell::new(Connection::new()));
+                .insert(packet.stream_id(), RefCell::new(Connection::new()));
         }
 
         let mut conn = self
             .connections
-            .get(&packet.identifier)
+            .get(&packet.stream_id())
             .unwrap()
             .borrow_mut();
         let mut remove_conn = false;
@@ -215,21 +215,21 @@ impl Session {
         if remove_conn {
             self.keystore.remove(&conn.id);
             std::mem::drop(conn);
-            self.connections.remove(&packet.identifier);
+            self.connections.remove(&packet.stream_id());
         }
 
         Ok(())
     }
 
     fn handle_loginpacket(&mut self, packet: &mut PoePacket) -> Result<(), Error> {
-        if !self.connections.contains_key(&packet.identifier) {
+        if !self.connections.contains_key(&packet.stream_id()) {
             self.connections
-                .insert(packet.identifier, RefCell::new(Connection::new()));
+                .insert(packet.stream_id(), RefCell::new(Connection::new()));
         }
 
         let mut conn = self
             .connections
-            .get(&packet.identifier)
+            .get(&packet.stream_id())
             .unwrap()
             .borrow_mut();
         let mut remove_conn = false;
@@ -254,6 +254,7 @@ impl Session {
                         // first packet to decrypt, check if key works
                         1 => {
                             if conn.cipher.is_none() {
+                                log::info!("Getting key for connection 0");
                                 let keypair = self.keystore.get(&0);
                                 if let Some(keypair) = keypair {
                                     let send = Salsa20::new(&keypair.key, &keypair.iv_sender);
@@ -383,7 +384,7 @@ impl Session {
         if remove_conn {
             self.keystore.remove(&conn.id);
             std::mem::drop(conn);
-            self.connections.remove(&packet.identifier);
+            self.connections.remove(&packet.stream_id());
         }
 
         Ok(())

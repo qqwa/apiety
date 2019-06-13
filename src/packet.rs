@@ -2,6 +2,7 @@
 
 use crate::caputre_packets::StreamIdentifier;
 use byteorder::{ByteOrder, NetworkEndian};
+use std::convert::identity;
 use std::fmt;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -97,6 +98,14 @@ impl PoePacket {
         PoePacket {
             identifier,
             payload,
+        }
+    }
+
+    pub fn stream_id(&self) -> u16 {
+        let direction: Direction = self.identifier.into();
+        match direction {
+            Direction::ToLoginserver | Direction::ToGameserver => self.identifier.source_port,
+            Direction::FromLoginserver | Direction::FromGameserver => self.identifier.dest_port,
         }
     }
 
