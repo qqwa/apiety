@@ -16,6 +16,7 @@ use crate::Error;
 pub fn capture_from_interface(sender: mpsc::Sender<Vec<u8>>) -> Result<(), Error> {
     for device in Device::list().unwrap() {
         let device_string = device.name.clone();
+        log::info!("started capturing from device {}", device_string);
         let sender = sender.clone();
         std::thread::Builder::new()
             .name(device_string.clone())
@@ -44,6 +45,7 @@ pub fn capture_from_interface(sender: mpsc::Sender<Vec<u8>>) -> Result<(), Error
                         }
                     }
                 }
+                log::info!("stopped capturing from device {}", device_string);
             })
             .unwrap();
     }
