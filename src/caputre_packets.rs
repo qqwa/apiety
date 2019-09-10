@@ -148,6 +148,12 @@ impl StreamIdentifier {
     }
 }
 
+impl std::fmt::Display for StreamIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}:{}->{}:{}]", self.source_ip, self.source_port, self.dest_ip, self.dest_port)
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum StreamState {
     Initial,
@@ -246,7 +252,7 @@ impl Stream {
 
         if old_state != self.state {
             log::info!(
-                "{:?} state change: {:?}->{:?}",
+                "{} state change: {:?}->{:?}",
                 self.identifier,
                 old_state,
                 self.state

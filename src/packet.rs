@@ -82,7 +82,7 @@ impl fmt::Display for PoePacket {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "[{:?}] id: {:02x?}, size: {}",
+            "{} id: {:02x?}, size: {}",
             self.identifier,
             &self.payload[..2],
             self.payload.len()
