@@ -1,0 +1,9 @@
+[submodule "vendors/spdlog"]
+	path = vendors/spdlog
+	url = https://github.com/gabime/spdlog.git
+[submodule "vendors/readerwriterqueue"]
+	path = vendors/readerwriterqueue
+	url = https://github.com/cameron314/readerwriterqueue.git
+[submodule "vendors/libtins"]
+	path = vendors/libtins
+	url = https://github.com/mfontanini/libtins.git
