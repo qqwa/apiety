@@ -3,9 +3,15 @@
 
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/bin_to_hex.h>
+#include <argh.h>
 
 
-int main() {
+int main(int, char* argv[]) {
+    argh::parser cmdl(argv);
+    if (cmdl[{ "-d", "--debug" }]) {
+        spdlog::set_level(spdlog::level::debug);
+    }
+
     spdlog::set_pattern("[%Y-%M-%d %H:%M:%S] [%^%L%$] %v");
     spdlog::flush_on(spdlog::level::info);
 
@@ -30,7 +36,7 @@ int main() {
                 break;
         }
 
-        spdlog::info("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
+        spdlog::debug("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
 
         item.payload.clear();
     }

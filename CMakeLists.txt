@@ -11,6 +11,7 @@ add_executable(apiety2 src/main.cpp src/CaptureStreams.cpp src/CaptureStreams.h)
 target_include_directories(apiety2 PRIVATE vendors/readerwriterqueue)
 target_include_directories(apiety2 PRIVATE vendors/libtins/include)
 target_include_directories(apiety2 PRIVATE ${PCAP_INCLUDE_DIR})
+target_include_directories(apiety2 PRIVATE vendors/argh)
 
 target_link_libraries(apiety2 PRIVATE spdlog::spdlog tins)
 if(UNIX AND NOT APPLE)

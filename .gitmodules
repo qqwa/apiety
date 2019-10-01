@@ -7,3 +7,6 @@
 [submodule "vendors/libtins"]
 	path = vendors/libtins
 	url = https://github.com/mfontanini/libtins.git
+[submodule "vendors\\argh"]
+	path = vendors\\argh
+	url = https://github.com/adishavit/argh.git
