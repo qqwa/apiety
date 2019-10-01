@@ -11,6 +11,7 @@
 #include <tins/tcp_ip/stream.h>
 #include <tins/tcp_ip/stream_follower.h>
 
+#include <spdlog/spdlog.h>
 #include "spdlog/fmt/ostr.h"
 
 #include <readerwriterqueue.h>

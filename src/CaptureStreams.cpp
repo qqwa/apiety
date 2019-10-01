@@ -1,7 +1,6 @@
 #include "CaptureStreams.h"
 
 #include <thread>
-#include <spdlog/spdlog.h>
 
 CaptureStreams::CaptureStreams(moodycamel::BlockingReaderWriterQueue<CapturedPacket> &queue) : queue(queue) {
     count = 0;

@@ -30,7 +30,7 @@ int main() {
                 break;
         }
 
-        spdlog::info("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min(len, 10ul)));
+        spdlog::info("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
 
         item.payload.clear();
     }
