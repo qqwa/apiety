@@ -21,6 +21,8 @@ struct StreamIdentifier {
     Tins::TCPIP::Stream::timestamp_type creation_time;
     Tins::IPv4Address ip;
     uint16_t port;
+    Tins::IPv4Address ip_client;
+    uint16_t port_client;
     size_t bytes_recv;
     size_t bytes_send;
     template<typename OStream>
@@ -60,7 +62,7 @@ struct CapturedPacket {
 
 class CaptureStreams {
 public:
-    CaptureStreams(moodycamel::BlockingReaderWriterQueue<CapturedPacket> &queue);
+    CaptureStreams(moodycamel::BlockingReaderWriterQueue<CapturedPacket> &queue, moodycamel::BlockingReaderWriterQueue<StreamIdentifier> &remove_queue);
     ~CaptureStreams();
     std::thread start_thread();
 private:
@@ -69,9 +71,11 @@ private:
     void on_stream_terminated(Tins::TCPIP::Stream& stream, Tins::TCPIP::StreamFollower::TerminationReason reason);
     void on_client_data(Tins::TCPIP::Stream& stream);
     void on_server_data(Tins::TCPIP::Stream& stream);
+    void remove_streams(Tins::TCPIP::StreamFollower& follower);
 
     std::map<Tins::TCPIP::Stream::timestamp_type, StreamIdentifier> stream_identifier;
     moodycamel::BlockingReaderWriterQueue<CapturedPacket> &queue;
+    moodycamel::BlockingReaderWriterQueue<StreamIdentifier> &remove_queue;
 };
 
 
