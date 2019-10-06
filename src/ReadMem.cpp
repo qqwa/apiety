@@ -6,16 +6,16 @@ ReadMem::ReadMem(moodycamel::BlockingReaderWriterQueue<KeyPair> &queue) : queue(
 
 ReadMem::~ReadMem() {}
 
-std::thread ReadMem::start_thread() {
-    return std::thread([&](){
+void ReadMem::start_thread() {
+    std::thread([&](){
         search_keys();
-    });
+    }).detach();
 }
 
 void ReadMem::search_keys() {
     int key_size = 64;
     std::string magic_string = "expand 32-byte k";
-    std::vector<int8_t> magic(magic_string.begin(), magic_string.end());
+    std::vector<uint8_t> magic(magic_string.begin(), magic_string.end());
     DWORD pid = 0;
     if (get_pid(&pid)) {
         spdlog::info("Found Path of Exile Process with pid:{}", pid);
@@ -25,7 +25,7 @@ void ReadMem::search_keys() {
         MEMORY_BASIC_INFORMATION info = {};
         size_t bytes_read = 0;
 
-        std::vector<int8_t> buffer(4092);
+        std::vector<uint8_t> buffer(4092);
 
         while(true) {
             auto res = VirtualQueryEx(handle, (void*)address, &info, sizeof(MEMORY_BASIC_INFORMATION));
@@ -58,15 +58,36 @@ void ReadMem::search_keys() {
                     }
 
                     if (magic[0] == buffer[i*16] && magic[1] == buffer[i*16+1] && magic[2] == buffer[i*16+2] && magic[3] == buffer[i*16+3]
-//                     && magic[4] == buffer[i*16+4] && magic[5] == buffer[i*16+5] && magic[6] == buffer[i*16+6] && magic[7] == buffer[i*16+7]
-//                     && magic[8] == buffer[i*16+8] && magic[9] == buffer[i*16+9] && magic[10] == buffer[i*16+10] && magic[11] == buffer[i*16+11]
-//                     && magic[12] == buffer[i*16+12] && magic[13] == buffer[i*16+13] && magic[14] == buffer[i*16+14] && magic[15] == buffer[i*16+15]
                     ) {
                         if (std::equal(magic.begin(), magic.end(), buffer.begin() + (i*16)) && std::equal(magic.begin(), magic.end(), buffer.begin() + (i*16) + 0xc0)) {
                             spdlog::info("Found KeyPair at base:{:x} offset:{:x} size:{:x}", (size_t)info.BaseAddress, (i*16), info.RegionSize);
                             KeyPair pair = {};
-                            std::copy(buffer.begin() + (i*16), buffer.begin() + (i*16) + 64, pair.send);
-                            std::copy(buffer.begin() + (i*16) + 0xc0, buffer.begin() + (i*16) + 0xc0 + 64, pair.recv);
+                            uint8_t *sbp = (uint8_t *)&buffer[i*16 + 16];
+                            std::copy(sbp+ 9*4, sbp+ 9*4+4, &pair.send[0*4]);
+                            std::copy(sbp+ 6*4, sbp+ 6*4+4, &pair.send[1*4]);
+                            std::copy(sbp+ 3*4, sbp+ 3*4+4, &pair.send[2*4]);
+                            std::copy(sbp+ 0*4, sbp+ 0*4+4, &pair.send[3*4]);
+                            std::copy(sbp+11*4, sbp+11*4+4, &pair.send[4*4]);
+                            std::copy(sbp+ 8*4, sbp+ 8*4+4, &pair.send[5*4]);
+                            std::copy(sbp+ 5*4, sbp+ 5*4+4, &pair.send[6*4]);
+                            std::copy(sbp+ 2*4, sbp+ 2*4+4, &pair.send[7*4]);
+
+                            std::copy(sbp+10*4, sbp+10*4+4, &pair.send_iv[0]);
+                            std::copy(sbp+ 7*4, sbp+ 7*4+4, &pair.send_iv[4]);
+
+                            uint8_t *rbp = (uint8_t *)&buffer[i*16 + 16 + 0xc0];
+                            std::copy(rbp+ 9*4, rbp+ 9*4+4, &pair.recv[0*4]);
+                            std::copy(rbp+ 6*4, rbp+ 6*4+4, &pair.recv[1*4]);
+                            std::copy(rbp+ 3*4, rbp+ 3*4+4, &pair.recv[2*4]);
+                            std::copy(rbp+ 0*4, rbp+ 0*4+4, &pair.recv[3*4]);
+                            std::copy(rbp+11*4, rbp+11*4+4, &pair.recv[4*4]);
+                            std::copy(rbp+ 8*4, rbp+ 8*4+4, &pair.recv[5*4]);
+                            std::copy(rbp+ 5*4, rbp+ 5*4+4, &pair.recv[6*4]);
+                            std::copy(rbp+ 2*4, rbp+ 2*4+4, &pair.recv[7*4]);
+
+                            std::copy(rbp+10*4, rbp+10*4+4, &pair.recv_iv[0]);
+                            std::copy(rbp+ 7*4, rbp+ 7*4+4, &pair.recv_iv[4]);
+
                             queue.enqueue(pair);
                             i += 0xc0;
                         }
