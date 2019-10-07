@@ -3,7 +3,6 @@
 #include "StreamFollower.h"
 #include "ReadMem.h"
 
-#include <spdlog/spdlog.h>
 #include <spdlog/fmt/bin_to_hex.h>
 #include <argh.h>
 
@@ -20,14 +19,9 @@ int main(int, char* argv[]) {
     moodycamel::BlockingReaderWriterQueue<StreamIdentifier> remove_queue(10);
     CaptureStreams captureStreams(queue, remove_queue);
     auto capture_thread = captureStreams.start_thread();
-
-    moodycamel::BlockingReaderWriterQueue<KeyPair> key_queue(10);
-    ReadMem mem(key_queue);
-
     auto stream_follower = StreamFollower();
 
     CapturedPacket item;
-    KeyPair key_item;
     StreamIdentifier remove_identifer;
     while(true) {
         if (queue.wait_dequeue_timed(item, std::chrono::milliseconds(10))) {
@@ -45,10 +39,6 @@ int main(int, char* argv[]) {
             }
             spdlog::debug("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
             stream_follower.enqueue_packet(item);
-        }
-
-        while (key_queue.try_dequeue(key_item)) {
-            stream_follower.add_key(key_item);
         }
 
         while (remove_queue.try_dequeue(remove_identifer)) {

@@ -2,17 +2,8 @@
 #include <spdlog/spdlog.h>
 #include <string>
 
-ReadMem::ReadMem(moodycamel::BlockingReaderWriterQueue<KeyPair> &queue) : queue(queue) {}
-
-ReadMem::~ReadMem() {}
-
-void ReadMem::start_thread() {
-    std::thread([&](){
-        search_keys();
-    }).detach();
-}
-
-void ReadMem::search_keys() {
+std::vector<KeyPair> search_keys() {
+    std::vector<KeyPair> result;
     int key_size = 64;
     std::string magic_string = "expand 32-byte k";
     std::vector<uint8_t> magic(magic_string.begin(), magic_string.end());
@@ -89,7 +80,7 @@ void ReadMem::search_keys() {
                             std::copy(rbp+10*4, rbp+10*4+4, &pair.recv_iv[0]);
                             std::copy(rbp+ 7*4, rbp+ 7*4+4, &pair.recv_iv[4]);
 
-                            queue.enqueue(pair);
+                            result.push_back(pair);
                             i += 0xc0;
                         }
                     }
@@ -100,13 +91,13 @@ void ReadMem::search_keys() {
             address = (size_t)info.BaseAddress + info.RegionSize;
         }
         spdlog::info("Finished scanning memory. Processed {}MB of Memory", bytes_read/1000000);
-
     } else {
         spdlog::error("Could not find Path of Exile Process");
     }
+    return result;
 }
 
-int ReadMem::get_pid(DWORD *pid) {
+int get_pid(DWORD *pid) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); //all processes
 
     PROCESSENTRY32W entry;
