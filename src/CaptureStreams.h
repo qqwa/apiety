@@ -29,6 +29,10 @@ struct StreamIdentifier {
     friend OStream &operator<<(OStream &os, const StreamIdentifier &identifier) {
         return os << identifier.id;
     }
+    bool operator==(const StreamIdentifier& rhs)
+    {
+        return id == rhs.id;
+    }
 };
 
 enum class Direction {

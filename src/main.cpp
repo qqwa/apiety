@@ -1,5 +1,6 @@
 #include <readerwriterqueue.h>
 #include "CaptureStreams.h"
+#include "StreamFollower.h"
 #include "ReadMem.h"
 
 #include <spdlog/spdlog.h>
@@ -23,6 +24,8 @@ int main(int, char* argv[]) {
     moodycamel::BlockingReaderWriterQueue<KeyPair> key_queue(10);
     ReadMem mem(key_queue);
 
+    auto stream_follower = StreamFollower();
+
     CapturedPacket item;
     KeyPair key_item;
     StreamIdentifier remove_identifer;
@@ -40,16 +43,18 @@ int main(int, char* argv[]) {
                     total = item.identifier.bytes_send;
                     break;
             }
-            spdlog::info("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
-            item.payload.clear();
+            spdlog::debug("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
+            stream_follower.enqueue_packet(item);
         }
 
         while (key_queue.try_dequeue(key_item)) {
-            // TODO: add KeyPair to keystore
+            stream_follower.add_key(key_item);
         }
 
         while (remove_queue.try_dequeue(remove_identifer)) {
             spdlog::info("Removed stream: id:{} server:{}:{}", remove_identifer, remove_identifer.ip.to_string(), remove_identifer.port);
+            stream_follower.remove_stream(remove_identifer);
         }
+        while(stream_follower.process_queue());
     }
 }

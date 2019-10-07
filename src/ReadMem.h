@@ -8,6 +8,7 @@
 #include <tlhelp32.h>
 
 struct KeyPair {
+    uint64_t id;
     uint8_t send[32];
     uint8_t send_iv[8];
     uint8_t recv[32];

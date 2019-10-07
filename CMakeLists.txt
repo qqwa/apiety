@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 add_subdirectory(vendors/libtins)
 add_subdirectory(vendors/spdlog)
 
-add_executable(apiety2 src/main.cpp src/CaptureStreams.cpp src/CaptureStreams.h src/ReadMem.cpp src/ReadMem.h)
+add_executable(apiety2 src/main.cpp src/CaptureStreams.cpp src/CaptureStreams.h src/ReadMem.cpp src/ReadMem.h src/StreamFollower.cpp src/StreamFollower.h)
 
 target_include_directories(apiety2 PRIVATE vendors/readerwriterqueue)
 target_include_directories(apiety2 PRIVATE vendors/libtins/include)

@@ -62,6 +62,7 @@ void ReadMem::search_keys() {
                         if (std::equal(magic.begin(), magic.end(), buffer.begin() + (i*16)) && std::equal(magic.begin(), magic.end(), buffer.begin() + (i*16) + 0xc0)) {
                             spdlog::info("Found KeyPair at base:{:x} offset:{:x} size:{:x}", (size_t)info.BaseAddress, (i*16), info.RegionSize);
                             KeyPair pair = {};
+                            pair.id = 0;
                             uint8_t *sbp = (uint8_t *)&buffer[i*16 + 16];
                             std::copy(sbp+ 9*4, sbp+ 9*4+4, &pair.send[0*4]);
                             std::copy(sbp+ 6*4, sbp+ 6*4+4, &pair.send[1*4]);
