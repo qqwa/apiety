@@ -23,6 +23,8 @@ struct StreamIdentifier {
     uint16_t port;
     Tins::IPv4Address ip_client;
     uint16_t port_client;
+    size_t packets_recv;
+    size_t packets_send;
     size_t bytes_recv;
     size_t bytes_send;
     template<typename OStream>

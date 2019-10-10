@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <queue>
+#include <crypto_rust.h>
 
 #include "CaptureStreams.h"
 #include "ReadMem.h"
@@ -23,7 +24,6 @@ class StreamFollower {
 public:
     StreamFollower();
     ~StreamFollower();
-    void add_key(KeyPair);
     void enqueue_packet(CapturedPacket packet);
     void remove_stream(StreamIdentifier identifier);
     bool process_queue();
@@ -32,6 +32,9 @@ private:
     bool to_gameserver();
     bool from_loginserver();
     bool to_loginserver();
+    void add_key(KeyPair key);
+    bool try_keys(uint16_t cipher, uint16_t expected, KeyPair* pair);
+    bool try_key(uint16_t cipher, uint16_t expected, KeyPair pair);
     std::vector<KeyPair> keys;
     StreamState *current_stream;
     StreamState *next_stream;

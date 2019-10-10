@@ -30,14 +30,14 @@ int main(int, char* argv[]) {
             switch (item.direction) {
                 case Direction::FromLoginServer:
                 case Direction::FromGameServer:
-                    total = item.identifier.bytes_recv;
+                    total = item.identifier.packets_recv;
                     break;
                 case Direction::ToLoginServer:
                 case Direction::ToGameServer:
-                    total = item.identifier.bytes_send;
+                    total = item.identifier.packets_send;
                     break;
             }
-            spdlog::debug("{} {}({:4d} - {:6d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
+            spdlog::debug("{} {}({:4d} - {:4d}): {:n}", item.identifier, item.direction, len, total, spdlog::to_hex(std::begin(item.payload), std::begin(item.payload) + std::min<size_t>(len, 10ul)));
             stream_follower.enqueue_packet(item);
         }
 

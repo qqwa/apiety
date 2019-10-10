@@ -21,6 +21,7 @@ void CaptureStreams::on_client_data(Tins::TCPIP::Stream &stream) {
         direction = Direction::ToLoginServer;
     }
 
+    identifier.packets_send++;
     identifier.bytes_send += len;
     CapturedPacket packet = {};
     packet.identifier = identifier;
@@ -41,6 +42,7 @@ void CaptureStreams::on_server_data(Tins::TCPIP::Stream &stream) {
         direction = Direction::FromLoginServer;
     }
 
+    identifier.packets_recv++;
     identifier.bytes_recv += len;
     CapturedPacket packet = {};
     packet.identifier = identifier;
