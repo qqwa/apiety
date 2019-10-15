@@ -100,6 +100,12 @@ bool StreamFollower::from_gameserver() {
         }
         // rest of packet needs to be decrypted
         salsa20_process(current_stream->salsa20_recv, packet.payload.data()+2, packet.payload.size()-2);
+
+        if (packet.payload[2] != 0x00 || packet.payload[3] != 0x13) {
+            spdlog::warn("StreamFollower current stream is broken");
+            current_stream->mark_for_removel = true;
+            return false;
+        }
     } else {
         // packet needs to be decrypted
         salsa20_process(current_stream->salsa20_recv, packet.payload.data(), packet.payload.size());
