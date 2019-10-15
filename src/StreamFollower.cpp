@@ -110,6 +110,24 @@ bool StreamFollower::from_gameserver() {
         // packet needs to be decrypted
         salsa20_process(current_stream->salsa20_recv, packet.payload.data(), packet.payload.size());
     }
+
+    if (packet.payload[0] == 0x00 && packet.payload[1] == 0x1a) {
+        uint32_t connection_id;
+        memcpy(&connection_id, packet.payload.data()+14, sizeof(connection_id));
+        connection_id = ntohl(connection_id);
+
+        KeyPair pair = {};
+        pair.id = connection_id;
+        memcpy(&pair.recv, packet.payload.data()+48, sizeof(pair.recv));
+        memcpy(&pair.send, packet.payload.data()+48, sizeof(pair.send));
+
+        memcpy(&pair.send_iv, packet.payload.data()+80, sizeof(pair.send_iv));
+        memcpy(&pair.recv_iv, packet.payload.data()+96, sizeof(pair.recv_iv));
+
+        add_key(pair);
+        spdlog::info("Gameserver got key for gameserver with id:{}", connection_id);
+    }
+
     spdlog::debug("{} {}({:4d} - {:4d}): {:n}", current_stream->identifier, packet.direction, packet.payload.size(), current_stream->count_processed_packets_recv, spdlog::to_hex(std::begin(packet.payload), std::begin(packet.payload) + std::min<size_t>(packet.payload.size(), 10ul)));
     current_stream->packet_buffer.pop();
     current_stream->count_processed_packets_recv++;
