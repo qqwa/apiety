@@ -229,6 +229,16 @@ void StreamFollower::add_key(KeyPair key) {
     }
 }
 
+bool StreamFollower::get_key(KeyPair *key, uint32_t id) {
+    for(auto &cur_key : keys) {
+        if (cur_key.id == id) {
+            *key = cur_key;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool StreamFollower::try_keys(uint16_t cipher, uint16_t expected, KeyPair *pair) {
     for(auto& key : keys) {
         if (try_key(cipher, expected, key)) {

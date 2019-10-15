@@ -33,6 +33,7 @@ private:
     bool from_loginserver();
     bool to_loginserver();
     void add_key(KeyPair key);
+    bool get_key(KeyPair* key, uint32_t id);
     bool try_keys(uint16_t cipher, uint16_t expected, KeyPair* pair);
     bool try_key(uint16_t cipher, uint16_t expected, KeyPair pair);
     std::vector<KeyPair> keys;
