@@ -14,6 +14,10 @@ void CaptureStreams::on_client_data(Tins::TCPIP::Stream &stream) {
     auto len = stream.client_payload().size();
     auto &buffer = stream.client_payload();
 
+    if (len == 0) {
+        return;
+    }
+
     Direction direction;
     if (identifier.port == 6112) {
         direction = Direction::ToGameServer;
@@ -34,6 +38,10 @@ void CaptureStreams::on_server_data(Tins::TCPIP::Stream &stream) {
     auto &identifier = stream_identifier[stream.create_time()];
     auto len = stream.server_payload().size();
     auto &buffer = stream.server_payload();
+
+    if (len == 0) {
+        return;
+    }
 
     Direction direction;
     if (identifier.port == 6112) {
