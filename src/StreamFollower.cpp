@@ -152,6 +152,23 @@ bool StreamFollower::from_loginserver() {
     } else {
         salsa20_process(current_stream->salsa20_recv, packet.payload.data(), packet.payload.size());
     }
+
+    if (packet.payload[0] == 0x00 && packet.payload[1] == 0x10) {
+        uint32_t connection_id;
+        memcpy(&connection_id, packet.payload.data()+10, sizeof(connection_id));
+        connection_id = ntohl(connection_id);
+
+        KeyPair pair = {};
+        memcpy(&pair.recv, packet.payload.data()+43, sizeof(pair.recv));
+        memcpy(&pair.send, packet.payload.data()+43, sizeof(pair.send));
+
+        memcpy(&pair.send_iv, packet.payload.data()+75, sizeof(pair.send_iv));
+        memcpy(&pair.recv_iv, packet.payload.data()+91, sizeof(pair.recv_iv));
+
+        add_key(pair);
+        spdlog::info("Loginserver got key for gameserver with id:{}", connection_id);
+    }
+
     spdlog::debug("{} {}({:4d} - {:4d}): {:n}", current_stream->identifier, packet.direction, packet.payload.size(), current_stream->count_processed_packets_recv, spdlog::to_hex(std::begin(packet.payload), std::begin(packet.payload) + std::min<size_t>(packet.payload.size(), 10ul)));
     current_stream->packet_buffer.pop();
     current_stream->count_processed_packets_recv++;
@@ -201,7 +218,15 @@ bool StreamFollower::to_loginserver() {
 }
 
 void StreamFollower::add_key(KeyPair key) {
-
+    bool exists = false;
+    for(auto &cur_key : keys) {
+        if (cur_key.id == key.id) {
+            exists = true;
+        }
+    }
+    if (!exists) {
+        keys.push_back(key);
+    }
 }
 
 bool StreamFollower::try_keys(uint16_t cipher, uint16_t expected, KeyPair *pair) {
