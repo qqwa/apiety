@@ -99,9 +99,12 @@ bool StreamFollower::from_gameserver() {
             return false;
         }
         // rest of packet needs to be decrypted
+        salsa20_process(current_stream->salsa20_recv, packet.payload.data()+2, packet.payload.size()-2);
     } else {
         // packet needs to be decrypted
+        salsa20_process(current_stream->salsa20_recv, packet.payload.data(), packet.payload.size());
     }
+    spdlog::debug("{} {}({:4d} - {:4d}): {:n}", current_stream->identifier, packet.direction, packet.payload.size(), current_stream->count_processed_packets_recv, spdlog::to_hex(std::begin(packet.payload), std::begin(packet.payload) + std::min<size_t>(packet.payload.size(), 10ul)));
     current_stream->packet_buffer.pop();
     current_stream->count_processed_packets_recv++;
     return true;
@@ -121,11 +124,23 @@ bool StreamFollower::to_gameserver() {
             uint32_t connection_id;
             memcpy(&connection_id, packet.payload.data()+2, sizeof(connection_id));
             connection_id = ntohl(connection_id);
-            spdlog::info("New Gameserver connection looking for encryption key with id:{}", connection_id);
+            KeyPair pair;
+            if (get_key(&pair, connection_id)) {
+                current_stream->salsa20_send = salsa20_new(pair.send, pair.send_iv);
+                current_stream->salsa20_recv = salsa20_new(pair.recv, pair.recv_iv);
+                spdlog::info("New Gameserver connection with connection id {} found key", connection_id);
+            } else {
+                spdlog::warn("New Gameserver connection with connection id {} could not find key", connection_id);
+                spdlog::warn("StreamFollower current stream is broken");
+                current_stream->mark_for_removel = true;
+                return false;
+            }
         }
     } else {
         // packet needs to be decrypted
+        salsa20_process(current_stream->salsa20_send, packet.payload.data(), packet.payload.size());
     }
+    spdlog::debug("{} {}({:4d} - {:4d}): {:n}", current_stream->identifier, packet.direction, packet.payload.size(), current_stream->count_processed_packets_send, spdlog::to_hex(std::begin(packet.payload), std::begin(packet.payload) + std::min<size_t>(packet.payload.size(), 10ul)));
 
     current_stream->packet_buffer.pop();
     current_stream->count_processed_packets_send++;
@@ -159,6 +174,7 @@ bool StreamFollower::from_loginserver() {
         connection_id = ntohl(connection_id);
 
         KeyPair pair = {};
+        pair.id = connection_id;
         memcpy(&pair.recv, packet.payload.data()+43, sizeof(pair.recv));
         memcpy(&pair.send, packet.payload.data()+43, sizeof(pair.send));
 
@@ -225,6 +241,7 @@ void StreamFollower::add_key(KeyPair key) {
         }
     }
     if (!exists) {
+        spdlog::debug("added key with id:{}", key.id);
         keys.push_back(key);
     }
 }
