@@ -1,6 +1,10 @@
 #include "ReadMem.h"
 #include <spdlog/spdlog.h>
 #include <string>
+#ifdef __linux__
+#include <filesystem>
+#include <fstream>
+#endif
 
 std::vector<KeyPair> search_keys() {
     std::vector<KeyPair> result;
@@ -110,10 +114,34 @@ std::vector<KeyPair> search_keys() {
 #ifdef __linux__
 
 int get_pid(uint64_t *pid) {
-    spdlog::info("get pid linux called");
+    for(auto& p: std::filesystem::directory_iterator("/proc")) {
+        if(p.is_directory()) {
+            // auto comm = std::filesystem::path(p.path().string() + "/comm");
+            auto comm = p.path();
+            comm /= "comm";
+            auto comm_p = std::filesystem::directory_entry(comm);
 
-    *pid = 5;
-
+            if (comm_p.is_regular_file()) {
+                std::ifstream t(comm);
+                std::string command((std::istreambuf_iterator<char>(t)),
+                                     std::istreambuf_iterator<char>());
+                command.erase(std::remove(command.begin(), command.end(), '\n'), command.end());
+                if (command == "PathOfExile"
+                || command == "PathOfExile_x64"
+                || command == "PathOfExile_Steam"
+                || command == "PathOfExile_x64Steam") {
+                    try {
+                        *pid = std::stoi(p.path().filename().string());
+                        return 1;
+                    } catch (std::invalid_argument const &e) {
+                        spdlog::warn("std::stoi std::invalid_argument thrown: {:s}", p.path().filename().string());
+                    } catch (std::out_of_range const &e) {
+                        spdlog::warn("std::stoi std::out_of_range thrown: {:s}", p.path().filename().string());
+                    }
+                }
+            }
+        }
+    }
     return 0;
 }
 
