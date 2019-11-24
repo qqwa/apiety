@@ -7,9 +7,17 @@ std::vector<KeyPair> search_keys() {
     int key_size = 64;
     std::string magic_string = "expand 32-byte k";
     std::vector<uint8_t> magic(magic_string.begin(), magic_string.end());
+    #ifdef __linux__
+    uint64_t pid = 0;
+    #elif _WIN32
     DWORD pid = 0;
+    #endif
+
     if (get_pid(&pid)) {
         spdlog::info("Found Path of Exile Process with pid:{}", pid);
+        #ifdef __linux__
+
+        #elif _WIN32
         auto handle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, true, pid);
 
         size_t address = 0;
@@ -91,11 +99,25 @@ std::vector<KeyPair> search_keys() {
             address = (size_t)info.BaseAddress + info.RegionSize;
         }
         spdlog::info("Finished scanning memory. Processed {}MB of Memory", bytes_read/1000000);
+        #endif
     } else {
         spdlog::error("Could not find Path of Exile Process");
     }
     return result;
 }
+
+
+#ifdef __linux__
+
+int get_pid(uint64_t *pid) {
+    spdlog::info("get pid linux called");
+
+    *pid = 5;
+
+    return 0;
+}
+
+#elif _WIN32
 
 int get_pid(DWORD *pid) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); //all processes
@@ -119,3 +141,5 @@ int get_pid(DWORD *pid) {
     CloseHandle(snap);
     return 0;
 }
+
+#endif
